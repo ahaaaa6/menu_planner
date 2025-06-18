@@ -3,7 +3,7 @@ import httpx
 from typing import List, Dict, Any
 import logging
 
-from menu_planner.core.config import settings
+from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 

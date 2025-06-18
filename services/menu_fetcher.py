@@ -3,10 +3,10 @@ import logging
 from typing import List, Tuple, Any
 from pydantic import ValidationError
 
-from menu_planner.schemas.menu import Dish, MenuRequest
-from menu_planner.core.config import settings
-from menu_planner.core.cache import redis_manager
-from menu_planner.services.api_client import fetch_dishes_from_external_api
+from ..schemas.menu import Dish, MenuRequest
+from ..core.config import settings
+from ..core.cache import redis_manager
+from .api_client import fetch_dishes_from_external_api
 
 logger = logging.getLogger(__name__)
 

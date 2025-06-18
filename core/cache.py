@@ -1,7 +1,7 @@
 # menu_planner/core/cache.py
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-from menu_planner.core.config import settings  # 修复：正确导入配置
+from .config import settings  # 修复：正确导入配置
 import logging
 
 logger = logging.getLogger(__name__)

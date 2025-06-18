@@ -6,11 +6,11 @@ from typing import List
 
 from fastapi import FastAPI, HTTPException, Body
 
-from menu_planner.schemas.menu import MenuRequest, MenuResponse
-from menu_planner.services.menu_fetcher import get_dishes_for_restaurant, preprocess_menu
-from menu_planner.services.genetic_planner import plan_menu_async
-from menu_planner.core.cache import redis_manager
-from menu_planner.core.config import settings  # 修复：正确导入配置
+from .schemas.menu import MenuRequest, MenuResponse
+from .services.menu_fetcher import get_dishes_for_restaurant, preprocess_menu
+from .services.genetic_planner import plan_menu_async
+from .core.cache import redis_manager
+from .core.config import settings  # 修复：正确导入配置
 
 # --- 日志配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
