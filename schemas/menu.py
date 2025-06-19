@@ -1,7 +1,7 @@
-# 文件: menu_planner/schemas/menu.py
+# menu_planner/schemas/menu.py
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union, Literal
 
 class Dish(BaseModel):
     """
@@ -19,15 +19,12 @@ class Dish(BaseModel):
     flavor_tags: List[str]
     is_vegetarian: bool 
     is_halal: bool
-    # --- 核心修正：采纳你的建议，直接使用 'main_ingredient' 作为字段名 ---
     main_ingredient: List[str]
 
-    # 这些字段在运行时由我们的业务逻辑动态添加，并非来自原始数据源
     final_price: Optional[float] = None
     contribution_to_dish_count: Optional[int] = None
     
     class Config:
-        # 这个配置允许Pydantic在某些情况下更灵活地处理数据，保留它是个好习惯。
         populate_by_name = True
 
 
@@ -36,11 +33,13 @@ class MenuRequest(BaseModel):
     定义了客户端发起排菜请求时的JSON结构。
     FastAPI会用它来校验入参。
     """
+    # --- 修改: 增加 user_id ---
+    user_id: str = Field(..., description="用于区分用户的唯一标识符")
     restaurant_id: str = Field(..., description="餐厅ID")
     diner_count: int = Field(..., gt=0, description="就餐人数")
     total_budget: float = Field(..., gt=0, description="总预算")
     dietary_restrictions: List[str] = Field([], description="饮食限制, 如: ['VEGETARIAN', 'HALAL', 'NO_SPICY']")
-
+    ignore_cache: bool = Field(False, description="用于判断是否调取缓存")
 
 class SimplifiedDish(BaseModel):
     """
@@ -63,3 +62,39 @@ class MenuResponse(BaseModel):
     总价: float
     菜品总数: int
     菜品列表: List[SimplifiedDish]
+
+# --- 新增: 用于异步流程的新模型 ---
+
+class PlanTaskSubmitResponse(BaseModel):
+    """
+    提交排菜任务后，立即返回的响应。
+    """
+    task_id: str = Field(..., description="唯一的任务ID")
+    status: Literal["PENDING"] = Field("PENDING", description="任务状态")
+    result_url: str = Field(..., description="用于查询最终结果的URL")
+
+class PlanResultProcessing(BaseModel):
+    """
+    当任务还在处理中时，结果查询接口返回的响应。
+    """
+    task_id: str
+    status: Literal["PROCESSING"]
+
+class PlanResultSuccess(BaseModel):
+    """
+    当任务成功完成时，结果查询接口返回的响应。
+    """
+    task_id: str
+    status: Literal["SUCCESS"]
+    result: List[MenuResponse]
+
+class PlanResultError(BaseModel):
+    """
+    当任务处理失败时，结果查询接口返回的响应。
+    """
+    task_id: str
+    status: Literal["FAILED"]
+    error: str
+
+# 使用联合类型，让FastAPI能够根据内容自动选择正确的模型
+PlanResultResponse = Union[PlanResultSuccess, PlanResultProcessing, PlanResultError]
