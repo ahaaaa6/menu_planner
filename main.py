@@ -36,56 +36,44 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 进程池与Redis连接池已关闭。")
 
 api_description = """
-一个利用遗传算法进行自动化中餐菜单规划的API服务。
-<br>An API service for automated Chinese menu planning using a genetic algorithm.
+一个利用遗传算法进行自动化配餐的API服务。
 
 ---
 
-## 🚀 API 测试指南 (API Testing Guide)
+## 🚀 API 测试指南
 
 本API采用**异步任务**模式，测试流程分为两步：
-This API uses an **asynchronous task** model. The testing process involves two steps:
 
-1.  **提交配餐任务 (Submit Planning Task)**:
+1.  **提交配餐任务**:
     - 使用 `POST /api/v1/plan-menu` 端点提交您的配餐需求。
-    - Use the `POST /api/v1/plan-menu` endpoint to submit your menu requirements.
     - 如果该请求可以被处理，系统会返回一个 `task_id`。
-    - If the request can be processed, the system will return a `task_id`.
 
-2.  **查询配餐结果 (Query Planning Result)**:
+2.  **查询配餐结果**:
     - 使用 `GET /api/v1/plan-menu/results/{task_id}` 端点，并将在上一步中获取的 `task_id` 作为路径参数。
-    - Use the `GET /api/v1/plan-menu/results/{task_id}` endpoint, using the `task_id` from the previous step as a path parameter.
     - 反复轮询此端点，直到 `status` 变为 `SUCCESS` 或 `FAILED`。
-    - Poll this endpoint repeatedly until the `status` changes to `SUCCESS` or `FAILED`.
 
 ---
 
 ### ⚡️ 关于缓存机制 (`ignore_cache` 参数)
 
 为了提升性能，本API内置了缓存系统。`ignore_cache` 参数（默认为 `false`）控制着它的行为：
-To improve performance, this API has a built-in caching system. The `ignore_cache` parameter (defaults to `false`) controls its behavior:
 
 -   **`ignore_cache: false` (默认行为 / Default behavior)**:
     - 当您提交任务时，系统会**优先在缓存中查找**符合您请求（人数、预算、忌口等）的方案。
-    - When you submit a task, the system will **first search the cache** for a plan that matches your criteria (diner count, budget, restrictions, etc.).
     - 如果**找到缓存**，您将**立即收到一个包含完整菜单方案的成功响应**，而不会创建新的后台任务。
-    - If a **cached plan is found**, you will **immediately receive a success response containing the full menu plan**, and no new background task will be created.
     - 如果**未找到缓存**，系统才会创建新任务，并返回 `task_id` 供您查询。
-    - If **no cache is found**, only then will a new task be created, and a `task_id` will be returned for you to poll.
 
 -   **`ignore_cache: true`**:
     - 当您提交任务时，系统会**强制忽略所有缓存**，总是创建一个新的后台任务来实时计算全新的菜单方案。您总会收到一个 `task_id`。
-    - When you submit a task, the system will **forcefully ignore all caches** and always create a new background task to compute a fresh menu plan. You will always receive a `task_id`.
 
 > **测试建议**: 在进行功能或算法测试时，建议将 `ignore_cache` 设置为 `true` 以确保每次都触发新的计算。
-> **Testing Tip**: When testing functionality or the algorithm, it is recommended to set `ignore_cache` to `true` to ensure a new calculation is triggered every time.
 """
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 app = FastAPI(
     title="AI配餐模型 API",
     description=api_description, # <-- 修改这里，使用新变量
-    version="2.1.0",
+    version="1.0.0",
     lifespan=lifespan
 )
 
