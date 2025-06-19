@@ -3,23 +3,24 @@ services:
     image: "redis:alpine"
     container_name: menu_planner_redis
     restart: always
+    ports:
+      - "6379:6379"
 
   mock-api:
     container_name: menu_planner_mock_api
-    # 修正：为镜像命名，移除了尖括号
-    image: erikhowe/menu-planner-mock-api:latest
-    # 保留 build 指令，用于在本地构建
     build: .
     restart: always
-    command: ["uvicorn", "menu_planner.mock_dish_api:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: uvicorn mock_dish_api:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
 
   menu-planner-app:
     container_name: menu_planner_main_app
-    # 修正：为镜像命名，移除了尖括号
-    image: erikhowe/menu-planner-app:latest
-    # 保留 build 指令，用于在本地构建
     build: .
     restart: always
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
@@ -28,3 +29,5 @@ services:
     depends_on:
       - redis
       - mock-api
+    volumes:
+      - .:/app
