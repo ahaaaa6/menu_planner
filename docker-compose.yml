@@ -10,17 +10,20 @@ services:
     container_name: menu_planner_mock_api
     build: .
     restart: always
-    command: uvicorn mock_dish_api:app --host 0.0.0.0 --port 8001
+    # 修正命令：以包的模式启动
+    command: uvicorn menu_planner.mock_dish_api:app --host 0.0.0.0 --port 8001
     ports:
       - "8001:8001"
+    # 修正挂载路径：将本地代码挂载到容器内的 menu_planner 子目录
     volumes:
-      - .:/app
+      - .:/app/menu_planner
 
   menu-planner-app:
     container_name: menu_planner_main_app
     build: .
     restart: always
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    # 修正命令：以包的模式启动
+    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
@@ -29,5 +32,6 @@ services:
     depends_on:
       - redis
       - mock-api
+    # 修正挂载路径：将本地代码挂载到容器内的 menu_planner 子目录
     volumes:
-      - .:/app
+      - .:/app/menu_planner
