@@ -41,6 +41,26 @@ class MenuRequest(BaseModel):
     dietary_restrictions: List[str] = Field([], description="饮食限制, 如: ['VEGETARIAN', 'HALAL', 'NO_SPICY']")
     ignore_cache: bool = Field(False, description="用于判断是否调取缓存")
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "name": "标准6人请求 (Standard Request for 6)",
+                    "summary": "一个6人，预算600元的标准请求示例",
+                    "description": "餐厅ID为MZDP，无特殊忌口，忽略缓存。",
+                    "value": {
+                        "restaurant_id": "MZDP",
+                        "user_id": "user007",
+                        "diner_count": 6,
+                        "total_budget": 600,
+                        "dietary_restrictions": [],
+                        "ignore_cache": True
+                    }
+                }
+            ]
+        }
+    }
+
 class SimplifiedDish(BaseModel):
     """
     定义了在最终响应中，单个菜品的简化输出格式。

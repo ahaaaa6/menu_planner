@@ -23,7 +23,7 @@ class GAConfig(BaseSettings):
 
 class RedisConfig(BaseSettings):
     """Redis 缓存配置"""
-    host: str = Field(os.getenv("APP_REDIS_HOST", "localhost"), description="Redis 主机")
+    host: str = Field(os.getenv("REDIS_HOST", "localhost"), description="Redis 主机")
     port: int = Field(int(os.getenv("APP_REDIS_PORT", 6379)), description="Redis 端口")
     db: int = Field(int(os.getenv("APP_REDIS_DB", 0)), description="Redis 数据库")
     menu_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_MENU_CACHE_TTL_SECONDS", 3600)), description="菜单缓存过期时间（秒）")
@@ -33,7 +33,7 @@ class RedisConfig(BaseSettings):
 
 class APIConfig(BaseSettings):
     """外部 API 配置"""
-    mock_dish_api_url: str = Field(os.getenv("APP_API_MOCK_DISH_API_URL", "http://127.0.0.1:8001"), description="模拟菜品API地址")
+    mock_dish_api_url: str = Field(os.getenv("MOCK_DISH_API_URL", "http://127.0.0.1:8001"), description="模拟菜品API地址")
 
 
 class AppConfig(BaseSettings):
