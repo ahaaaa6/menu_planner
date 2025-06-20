@@ -1,37 +1,71 @@
+version: '3.8'
+
 services:
   redis:
-    image: "redis:alpine"
-    container_name: menu_planner_redis
-    restart: always
-    ports:
-      - "6379:6379"
+    image: "redis:alpine" # 使用官方 Redis 镜像
+    networks:
+      - menu-network
+    deploy:
+      replicas: 1
+      placement: 
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 256m
 
+  # Mock API 服务 - 构建并推送到镜像仓库
   mock-api:
-    container_name: menu_planner_mock_api
-    build: .
-    restart: always
-    # 修正命令：以包的模式启动
+    # 1. 请先构建镜像: docker build -t your-username/mock-api:latest .
+    # 2. 然后推送到仓库: docker push your-username/mock-api:latest
+    # 3. 最后将下面的 "image" 地址替换为您的实际地址
+    image: erikhowe/mock-api:1.0 # 建议使用明确的版本号
+    networks:
+      - menu-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 256m
+        reservations:
+          memory: 128m
     command: uvicorn menu_planner.mock_dish_api:app --host 0.0.0.0 --port 8001
-    ports:
-      - "8001:8001"
-    # 修正挂载路径：将本地代码挂载到容器内的 menu_planner 子目录
-    volumes:
-      - .:/app/menu_planner
 
+  # 主应用服务 - 需要您构建并推送到镜像仓库
   menu-planner-app:
-    container_name: menu_planner_main_app
-    build: .
-    restart: always
-    # 修正命令：以包的模式启动
-    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
+    # 1. 请先构建镜像: docker build -t your-username/menu-planner-app:1.0 .
+    # 2. 然后推送到仓库: docker push your-username/menu-planner-app:1.0
+    # 3. 最后将下面的 "image" 地址替换为您的实际地址
+    image: erikhowe/menu-planner-app:1.0 # 建议使用明确的版本号
     ports:
       - "8000:8000"
+    networks:
+      - menu-network
     environment:
-      - REDIS_HOST=redis
-      - MOCK_DISH_API_URL=http://mock-api:8001
-    depends_on:
-      - redis
-      - mock-api
-    # 修正挂载路径：将本地代码挂载到容器内的 menu_planner 子目录
-    volumes:
-      - .:/app/menu_planner
+      - APP_REDIS_HOST=redis
+      - APP_MOCK_API_URL=http://mock-api:8001
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 1g
+    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
+
+networks:
+  menu-network:
+    driver: overlay
+    attachable: true

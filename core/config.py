@@ -43,7 +43,22 @@ class AppConfig(BaseSettings):
     api: APIConfig = APIConfig()
     
     # 进程池配置
-    process_pool_max_workers: int = Field(int(os.getenv("APP_PROCESS_POOL_MAX_WORKERS", 4)), description="处理遗传算法的进程池最大工作进程数")
+    # 'N-1' 策略
+    # 确保核心数至少为1
+    cpu_cores = os.cpu_count() or 1
+    default_workers = max(1, cpu_cores - 1) 
+
+    process_pool_max_workers: int = Field(
+        int(os.getenv("APP_PROCESS_POOL_MAX_WORKERS", os.cpu_count() or 1)),
+        description="处理遗传算法的进程池最大工作进程数"
+    )
+
+    dynamic_queue_mem_threshold_percent: float = Field(
+        float(os.getenv("APP_DYNAMIC_QUEUE_MEM_THRESHOLD_PERCENT", 80.0)),
+        description="动态任务队列的内存使用率阈值(%)。超过此值将拒绝新任务。",
+        ge=0,
+        le=100
+    )
 
 # 实例化一个全局可用的配置对象
 settings = AppConfig()

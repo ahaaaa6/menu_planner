@@ -33,8 +33,7 @@ class MenuRequest(BaseModel):
     定义了客户端发起排菜请求时的JSON结构。
     FastAPI会用它来校验入参。
     """
-    # --- 修改: 增加 user_id ---
-    user_id: str = Field(..., description="用于区分用户的唯一标识符")
+ 
     restaurant_id: str = Field(..., description="餐厅ID")
     diner_count: int = Field(..., gt=0, description="就餐人数")
     total_budget: float = Field(..., gt=0, description="总预算")

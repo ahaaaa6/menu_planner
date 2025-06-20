@@ -2,6 +2,7 @@
 import logging
 import json
 import uuid
+import psutil
 import hashlib
 from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
@@ -77,7 +78,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# --- 新增: 辅助函数，用于创建缓存键 ---
+# --- 辅助函数，用于创建缓存键 ---
 def create_plan_cache_key(request: MenuRequest) -> str:
     """为方案请求创建一个确定性的缓存键"""
     # 将限制排序，确保 ['A', 'B'] 和 ['B', 'A'] 的哈希值相同
@@ -88,7 +89,7 @@ def create_plan_cache_key(request: MenuRequest) -> str:
     )
     return f"plan_cache:{hashlib.md5(key_string.encode()).hexdigest()}"
 
-# --- 新增: 后台任务执行函数 ---
+# --- 后台任务执行函数 ---
 async def run_planning_task(request: MenuRequest, task_id: str):
     """
     这个函数在后台运行，执行完整的配餐逻辑并将结果存入Redis。
@@ -127,7 +128,6 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         # 同时，更新方案缓存
         plan_cache_key = create_plan_cache_key(request)
         cache_data = {
-            "user_id": request.user_id,
             "plans": [res.model_dump() for res in menu_results]
         }
         async with redis_manager.get_connection() as redis:
@@ -149,7 +149,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
 
 @app.post(
     "/api/v1/plan-menu",
-    # 【修改点1】: 响应模型现在可以是两种类型之一
+    # 响应模型现在可以是两种类型之一
     response_model=Union[PlanTaskSubmitResponse, PlanResultSuccess],
     tags=["Menu Planning (Async)"]
 )
@@ -163,17 +163,17 @@ async def submit_menu_plan_task(
     - 如果缓存命中，立即返回成功结果。
     - 如果缓存未命中，返回任务ID供客户端轮询。
     """
-    logger.info(f"收到新的异步配餐请求 from user '{request.user_id}': 餐厅'{request.restaurant_id}', {request.diner_count}人, 预算 {request.total_budget}元")
+    logger.info(f"收到新的异步配餐请求: 餐厅'{request.restaurant_id}', {request.diner_count}人, 预算 {request.total_budget}元")
     
     plan_cache_key = create_plan_cache_key(request)
     async with redis_manager.get_connection() as redis:
         cached_plan_json = await redis.get(plan_cache_key)
     
-    # 【修改点2】: 缓存命中时的逻辑完全改变
+    #  缓存命中时的逻辑完全改变
     if cached_plan_json and not request.ignore_cache:
         cached_data = json.loads(cached_plan_json)
-        original_user = cached_data.get('user_id', 'unknown')
-        logger.info(f"方案缓存命中。直接返回由 '{original_user}' 创建的缓存方案。")
+        logger.info("方案缓存命中。直接返回缓存的方案。")
+        
         
         # 不再创建伪任务，而是直接构建并返回成功响应
         return PlanResultSuccess(
@@ -182,7 +182,28 @@ async def submit_menu_plan_task(
             result=cached_data["plans"]
         )
 
-    # 如果缓存不适用(不存在或被忽略)，则创建新任务 (这部分逻辑不变)
+    # 如果缓存不适用(不存在或被忽略)，则尝试创建新任务 
+    # 在创建任务前会检查当前系统内存使用率。
+
+     # 获取当前系统的虚拟内存使用情况
+    memory_status = psutil.virtual_memory()
+    memory_percent = memory_status.percent
+
+    # 检查内存使用率是否超过了配置的阈值
+    if memory_percent >= settings.dynamic_queue_mem_threshold_percent:
+        logger.warning(
+            f"内存使用率过高 ({memory_percent:.2f}%)，已达到阈值 "
+            f"({settings.dynamic_queue_mem_threshold_percent}%)。暂时拒绝新的任务请求。"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"服务当前负载过高 (内存使用率: {memory_percent:.2f}%)，请稍后重试。"
+                "Service is under high load, please try again later."
+            )
+        )
+    # --- 检查结束 ---
+
     task_id = str(uuid.uuid4())
     if cached_plan_json and request.ignore_cache:
         logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")

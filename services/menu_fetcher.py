@@ -75,7 +75,6 @@ async def get_dishes_for_restaurant(restaurant_id: str) -> List[Dish]:
         
     return validated_dishes
 
-# --- 核心修正：重构 preprocess_menu 函数 ---
 def preprocess_menu(all_dishes: List[Dish], request: MenuRequest) -> Tuple[List[Dish], str]:
     """对已加载的菜品列表进行业务逻辑过滤和处理。"""
     if not all_dishes:
@@ -83,7 +82,7 @@ def preprocess_menu(all_dishes: List[Dish], request: MenuRequest) -> Tuple[List[
     
     filtered_dishes = []
     for dish in all_dishes:
-        # --- 新增核心修正：过滤掉无效价格的菜品 ---
+        # --- 过滤掉无效价格的菜品 ---
         # 确保进入算法的每一道菜都有一个有效的、正数的价格。
         if not dish.price or dish.price <= 0:
             continue
