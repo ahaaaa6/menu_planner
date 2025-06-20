@@ -26,9 +26,8 @@ class RedisConfig(BaseSettings):
     host: str = Field(os.getenv("REDIS_HOST", "localhost"), description="Redis 主机")
     port: int = Field(int(os.getenv("APP_REDIS_PORT", 6379)), description="Redis 端口")
     db: int = Field(int(os.getenv("APP_REDIS_DB", 0)), description="Redis 数据库")
-    menu_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_MENU_CACHE_TTL_SECONDS", 3600)), description="菜单缓存过期时间（秒）")
-    # --- 新增 ---
-    plan_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_PLAN_CACHE_TTL_SECONDS", 600)), description="排菜方案缓存过期时间（秒），用于处理不同用户的相同请求")
+    menu_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_MENU_CACHE_TTL_SECONDS", 36000)), description="菜单缓存过期时间（秒）")
+    plan_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_PLAN_CACHE_TTL_SECONDS", 36000)), description="排菜方案缓存过期时间（秒），用于处理不同用户的相同请求")
 
 
 class APIConfig(BaseSettings):
@@ -53,12 +52,12 @@ class AppConfig(BaseSettings):
         description="处理遗传算法的进程池最大工作进程数"
     )
 
-    dynamic_queue_mem_threshold_percent: float = Field(
-        float(os.getenv("APP_DYNAMIC_QUEUE_MEM_THRESHOLD_PERCENT", 80.0)),
-        description="动态任务队列的内存使用率阈值(%)。超过此值将拒绝新任务。",
-        ge=0,
-        le=100
-    )
+    # dynamic_queue_mem_threshold_percent: float = Field(
+    #     float(os.getenv("APP_DYNAMIC_QUEUE_MEM_THRESHOLD_PERCENT", 80.0)),
+    #     description="动态任务队列的内存使用率阈值(%)。超过此值将拒绝新任务。",
+    #     ge=0,
+    #     le=100
+    # )
 
 # 实例化一个全局可用的配置对象
 settings = AppConfig()
