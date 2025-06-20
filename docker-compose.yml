@@ -20,9 +20,6 @@ services:
 
   # Mock API 服务 - 构建并推送到镜像仓库
   mock-api:
-    # 1. 请先构建镜像: docker build -t your-username/mock-api:latest .
-    # 2. 然后推送到仓库: docker push your-username/mock-api:latest
-    # 3. 最后将下面的 "image" 地址替换为您的实际地址
     image: erikhowe/mock-api:1.0 # 建议使用明确的版本号
     networks:
       - menu-network
@@ -39,9 +36,6 @@ services:
 
   # 主应用服务 - 需要您构建并推送到镜像仓库
   menu-planner-app:
-    # 1. 请先构建镜像: docker build -t your-username/menu-planner-app:1.0 .
-    # 2. 然后推送到仓库: docker push your-username/menu-planner-app:1.0
-    # 3. 最后将下面的 "image" 地址替换为您的实际地址
     image: erikhowe/menu-planner-app:1.0 # 建议使用明确的版本号
     ports:
       - "8000:8000"
