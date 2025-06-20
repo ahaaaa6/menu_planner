@@ -36,7 +36,7 @@ services:
 
   # 主应用服务 - 需要您构建并推送到镜像仓库
   menu-planner-app:
-    image: erikhowe/menu-planner-app:1.0 # 建议使用明确的版本号
+    image: erikhowe/menu-planner-app:1.1 # 建议使用明确的版本号
     ports:
       - "8000:8000"
     networks:
