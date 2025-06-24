@@ -1,0 +1,120 @@
+# 服务器部署版 docker-compose.yml
+# 适用于 Docker Swarm 集群部署
+# 注意：此文件应放在 menu_planner 目录中运行
+services:
+  # Redis 服务
+  redis:
+    image: "redis:alpine"
+    networks:
+      - menu-network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+        reservations:
+          memory: 256m
+          cpus: '0.25'
+    # 注意：Swarm 模式下 healthcheck 语法略有不同
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Mock API 服务 - 使用预构建镜像
+  mock-api:
+    image: erikhowe/mock-api:1.0  # 确保这个镜像已推送到镜像仓库
+    networks:
+      - menu-network
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
+        reservations:
+          memory: 128m
+          cpus: '0.1'
+    command: uvicorn menu_planner.mock_dish_api:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001').getcode()"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 主应用服务 - 使用预构建镜像
+  menu-planner-app:
+    image: erikhowe/menu-planner-app:1.1  # 确保这个镜像已推送到镜像仓库
+    ports:
+      - "8000:8000"
+    networks:
+      - menu-network
+    environment:
+      # Redis 配置 - 修正环境变量名称
+      - APP_REDIS_HOST=redis
+      - APP_REDIS_PORT=6379
+      - APP_REDIS_DB=0
+      - APP_REDIS_MENU_CACHE_TTL_SECONDS=36000
+      - APP_REDIS_PLAN_CACHE_TTL_SECONDS=36000
+      # Mock API 配置 - 修正变量名
+      - MOCK_DISH_API_URL=http://mock-api:8001
+      # 其他配置
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 60s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+        reservations:
+          memory: 1g
+          cpus: '0.5'
+    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  menu-network:
+    driver: overlay
+    attachable: true
