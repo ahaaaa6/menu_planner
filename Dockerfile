@@ -1,23 +1,27 @@
 # --- 阶段 1: 构建阶段 ---
-FROM python:3.11-slim AS builder
+FROM dockerproxy.com/library/python:3.11-slim AS builder
+
 WORKDIR /app
 
-# 直接复制当前目录下的 requirements.txt
+# 复制依赖文件
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# 使用中国镜像源安装依赖
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple/ -r requirements.txt
 
 # --- 阶段 2: 最终运行阶段 ---
-FROM python:3.11-slim
+FROM dockerproxy.com/library/python:3.11-slim
 
 WORKDIR /app
 
+# 从构建阶段复制安装的包
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
-# 将当前目录（.）的所有内容复制到镜像的 /app 目录下
+# 复制应用代码
 COPY . .
 
-# 暴露主应用的端口
+# 暴露端口
 EXPOSE 8000
 
 # 启动命令
