@@ -2,6 +2,7 @@
 import logging
 import json
 import uuid
+import time
 import psutil
 import hashlib
 from contextlib import asynccontextmanager
@@ -15,27 +16,70 @@ from .schemas.menu import (
 )
 from .services.menu_fetcher import get_dishes_for_restaurant, preprocess_menu
 from .services.genetic_planner import plan_menu_async
-from .core.cache import redis_manager
+from .core.cache import redis_manager, RedisConnectionError
 from .core.config import settings
 
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# 应用状态存储
 app_state = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 服务启动中...")
-    redis_manager.initialize()
-    app_state["PROCESS_POOL"] = ProcessPoolExecutor(max_workers=settings.process_pool_max_workers)
-    logger.info("✅ Redis连接池与进程池已创建。")
-    logger.info("🎉 服务已准备就绪!")
+    """应用生命周期管理"""
+    # 启动时
+    logger.info("🚀 应用启动中...")
+    
+    # 初始化 Redis 连接
+    try:
+        redis_manager.initialize()
+        logger.info("✅ Redis 连接池初始化成功")
+        
+        # 测试 Redis 连接
+        ping_result = await redis_manager.ping()
+        if ping_result:
+            logger.info("✅ Redis 连接测试成功")
+        else:
+            logger.warning("⚠️ Redis 连接测试失败，但应用将继续运行")
+            
+        # 打印配置信息
+        logger.info(f"📡 Redis 配置: {settings.redis.host}:{settings.redis.port}/{settings.redis.db}")
+        
+    except Exception as e:
+        logger.error(f"❌ Redis 初始化失败: {e}")
+        # 根据你的需求决定是否要阻止应用启动
+        # raise  # 取消注释这行会在 Redis 连接失败时阻止应用启动
+    
+    # 初始化进程池
+    try:
+        app_state["PROCESS_POOL"] = ProcessPoolExecutor(max_workers=settings.process_pool_max_workers)
+        logger.info(f"✅ 进程池已创建，最大工作进程数: {settings.process_pool_max_workers}")
+    except Exception as e:
+        logger.error(f"❌ 进程池初始化失败: {e}")
+        raise
+    
+    logger.info("🎉 应用已准备就绪!")
+    
     yield
-    logger.info("🛑 shutting down...")
-    app_state["PROCESS_POOL"].shutdown(wait=True)
-    redis_manager.close()
-    logger.info("🛑 进程池与Redis连接池已关闭。")
+    
+    # 关闭时
+    logger.info("🛑 应用关闭中...")
+    try:
+        if "PROCESS_POOL" in app_state:
+            app_state["PROCESS_POOL"].shutdown(wait=True)
+            logger.info("✅ 进程池已关闭")
+    except Exception as e:
+        logger.warning(f"⚠️ 关闭进程池时出现警告: {e}")
+    
+    try:
+        await redis_manager.close()
+        logger.info("✅ Redis 连接池已关闭")
+    except Exception as e:
+        logger.warning(f"⚠️ 关闭 Redis 连接时出现警告: {e}")
 
+# API 描述文档
 api_description = """
 根据预算、人数、忌口等条件自动化配餐的API服务。
 
@@ -61,9 +105,8 @@ api_description = """
 
 ### 第一层：菜品库缓存 (服务器端自动缓存)
 为了缩短**每一个新任务**的准备时间。
-  **工作原理**:
--   系统会在收到配餐请求时从数据源（Mock API或真实数据库）获取完整的菜品列表，并将其**缓存在高速的Redis**中。这个缓存有一个预设的生命周期（TTL），十个小时。
--   在缓存有效期内，所有新的配餐任务都无需再通过请求去获取菜品数据，而是直接从内存级的缓存中读取。
+-   系统会在收到配餐请求时从数据源（Mock API或真实数据库）获取该餐厅完整的菜品列表，并将其**缓存在Redis**中。这个缓存有一个预设的生命周期（TTL），十个小时。
+-   在缓存有效期内，该餐厅所有新的配餐任务都无需再通过请求去获取菜品数据，而是直接从缓存中读取。
 
 ### 第二层：配餐方案缓存 (用户端可控缓存)
 这是为了避免对**完全相同的请求**进行重复的CPU密集型计算。这个缓存通过 `ignore_cache` 参数来控制。
@@ -78,11 +121,10 @@ api_description = """
 
 > **测试建议**: 在进行性能基准测试或需要确保获得全新结果时，建议将 `ignore_cache` 设置为 `true`。
 """
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 app = FastAPI(
     title="AI配餐模型 API",
-    description=api_description, # <-- 修改这里，使用新变量
+    description=api_description,
     version="1.0.0",
     lifespan=lifespan
 )
@@ -101,7 +143,7 @@ def create_plan_cache_key(request: MenuRequest) -> str:
 # --- 后台任务执行函数 ---
 async def run_planning_task(request: MenuRequest, task_id: str):
     """
-    这个函数在后台运行，执行完整的配餐逻辑并将结果存入Redis。
+    后台任务执行函数，带Redis重试逻辑
     """
     task_result_key = f"task_result:{task_id}"
     try:
@@ -131,7 +173,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         result_data = PlanResultSuccess(
             task_id=task_id,
             status="SUCCESS",
-            result=[res.model_dump() for res in menu_results] # 转换为可序列化字典
+            result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
         # 同时，更新方案缓存
@@ -139,11 +181,29 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         cache_data = {
             "plans": [res.model_dump() for res in menu_results]
         }
-        async with redis_manager.get_connection() as redis:
-            await redis.set(task_result_key, result_data, ex=3600) # 任务结果缓存1小时
-            await redis.set(plan_cache_key, json.dumps(cache_data), ex=settings.redis.plan_cache_ttl_seconds)
 
-        logger.info(f"Task {task_id}: 成功完成并缓存结果。")
+        # 使用重试逻辑保存结果
+        task_saved = await redis_manager.set(
+            task_result_key, 
+            result_data, 
+            ex=3600
+        )
+        
+        cache_saved = await redis_manager.set(
+            plan_cache_key, 
+            json.dumps(cache_data), 
+            ex=settings.redis.plan_cache_ttl_seconds
+        )
+
+        if task_saved:
+            logger.info(f"Task {task_id}: 成功完成并保存任务结果。")
+        else:
+            logger.warning(f"Task {task_id}: 任务完成但无法保存到Redis。")
+            
+        if cache_saved:
+            logger.info(f"Task {task_id}: 方案缓存已更新。")
+        else:
+            logger.warning(f"Task {task_id}: 无法更新方案缓存。")
 
     except Exception as e:
         logger.error(f"Task {task_id}: 配餐任务执行失败: {e}", exc_info=True)
@@ -152,99 +212,63 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             status="FAILED",
             error=str(e)
         ).model_dump_json()
-        async with redis_manager.get_connection() as redis:
-            await redis.set(task_result_key, error_data, ex=3600)
+        
+        # 尝试保存错误信息
+        error_saved = await redis_manager.set(
+            task_result_key, 
+            error_data, 
+            ex=3600
+        )
+        
+        if not error_saved:
+            logger.error(f"Task {task_id}: 无法保存错误信息到Redis。")
 
-
-@app.post(
-    "/api/v1/plan-menu",
-    # 响应模型现在可以是两种类型之一
-    response_model=Union[PlanTaskSubmitResponse, PlanResultSuccess],
-    tags=["Menu Planning (Async)"]
-)
-async def submit_menu_plan_task(
-    request: MenuRequest,
-    background_tasks: BackgroundTasks,
-    fastapi_request: FastAPIRequest
+# --- 主要API端点 ---
+@app.post("/api/v1/plan-menu", response_model=Union[PlanTaskSubmitResponse, MenuResponse], tags=["Menu Planning (Async)"])
+async def submit_menu_plan(
+    request: MenuRequest = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    fastapi_request: FastAPIRequest = None
 ):
     """
-    - 提交一个配餐任务。
-    - 如果缓存命中，立即返回成功结果。
-    - 如果缓存未命中，返回任务ID供客户端轮询。
+    提交配餐任务（异步模式）
     """
-    logger.info(f"收到新的异步配餐请求: 餐厅'{request.restaurant_id}', {request.diner_count}人, 预算 {request.total_budget}元")
+    logger.info(f"收到配餐请求: 餐厅={request.restaurant_id}, 人数={request.diner_count}, 预算={request.total_budget}")
     
-    plan_cache_key = create_plan_cache_key(request)
-    async with redis_manager.get_connection() as redis:
-        cached_plan_json = await redis.get(plan_cache_key)
+    # 1. 检查缓存（如果用户未要求忽略缓存）
+    cached_plan_json = None
+    if not request.ignore_cache:
+        plan_cache_key = create_plan_cache_key(request)
+        try:
+            cached_plan_json = await redis_manager.get(plan_cache_key)
+            if cached_plan_json:
+                logger.info(f"方案缓存命中，立即返回结果。")
+                cached_data = json.loads(cached_plan_json)
+                return MenuResponse(plans=cached_data["plans"])
+        except Exception as e:
+            logger.warning(f"读取缓存失败: {e}")
     
-    #  缓存命中时的逻辑完全改变
-    if cached_plan_json and not request.ignore_cache:
-        cached_data = json.loads(cached_plan_json)
-        logger.info("方案缓存命中。直接返回缓存的方案。")
-        
-        
-        # 不再创建伪任务，而是直接构建并返回成功响应
-        return PlanResultSuccess(
-            task_id=f"cached-{uuid.uuid4()}", # 仍然生成一个唯一的ID用于追踪
-            status="SUCCESS",
-            result=cached_data["plans"]
-        )
-
-    # 如果缓存不适用(不存在或被忽略)，则尝试创建新任务 
-    # 在创建任务前会检查当前系统内存使用率。
-
-    #  # 获取当前系统的虚拟内存使用情况
-    # memory_status = psutil.virtual_memory()
-    # memory_percent = memory_status.percent
-
-    # # 检查内存使用率是否超过了配置的阈值
-    # if memory_percent >= settings.dynamic_queue_mem_threshold_percent:
-    #     logger.warning(
-    #         f"内存使用率过高 ({memory_percent:.2f}%)，已达到阈值 "
-    #         f"({settings.dynamic_queue_mem_threshold_percent}%)。暂时拒绝新的任务请求。"
-    #     )
-    #     raise HTTPException(
-    #         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-    #         detail=(
-    #             f"服务当前负载过高 (内存使用率: {memory_percent:.2f}%)，请稍后重试。"
-    #             "Service is under high load, please try again later."
-    #         )
-    #     )
-    # # --- 检查结束 ---
-
+    # 2. 创建新任务
     task_id = str(uuid.uuid4())
     if cached_plan_json and request.ignore_cache:
         logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")
     else:
         logger.info(f"方案缓存未命中。创建新任务: {task_id}")
 
+    # 3. 标记任务正在处理中
     task_result_key = f"task_result:{task_id}"
     processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
-    async with redis_manager.get_connection() as redis:
-        await redis.set(task_result_key, processing_data, ex=3600)
+    
+    try:
+        await redis_manager.set(task_result_key, processing_data, ex=3600)
+    except Exception as e:
+        logger.error(f"无法保存任务状态到Redis: {e}")
+        raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后重试。")
 
+    # 4. 将耗时任务添加到后台
     background_tasks.add_task(run_planning_task, request, task_id)
     
-    result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
-    # 只有在创建新任务时，才返回这个 PENDING 状态的响应
-    return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
-
-
-    # 2. 如果缓存不适用，创建新任务
-    task_id = str(uuid.uuid4())
-    logger.info(f"方案缓存未命中或被忽略。创建新任务: {task_id}")
-    
-    # 标记任务正在处理中
-    task_result_key = f"task_result:{task_id}"
-    processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
-    async with redis_manager.get_connection() as redis:
-        await redis.set(task_result_key, processing_data, ex=3600) # 先占位，防止客户端过早查询
-
-    # 3. 将耗时任务添加到后台
-    background_tasks.add_task(run_planning_task, request, task_id)
-    
-    # 4. 立即返回任务ID
+    # 5. 立即返回任务ID
     result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
     return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
 
@@ -252,17 +276,64 @@ async def submit_menu_plan_task(
 @app.get("/api/v1/plan-menu/results/{task_id}", response_model=PlanResultResponse, tags=["Menu Planning (Async)"])
 async def get_menu_plan_result(task_id: str = Path(..., description="提交任务时获取的Task ID")):
     """
-    **v1 (异步)**: 根据任务ID查询配餐结果。
+    根据任务ID查询配餐结果，带重试逻辑
     """
     task_result_key = f"task_result:{task_id}"
-    async with redis_manager.get_connection() as redis:
-        result_json = await redis.get(task_result_key)
-        
-    if not result_json:
-        raise HTTPException(status_code=404, detail="任务ID不存在或已过期。")
     
-    result_data = json.loads(result_json)
-    return result_data
+    try:
+        result_json = await redis_manager.get(task_result_key)
+        
+        if not result_json:
+            raise HTTPException(status_code=404, detail="任务ID不存在或已过期。")
+        
+        result_data = json.loads(result_json)
+        return result_data
+        
+    except RedisConnectionError:
+        raise HTTPException(
+            status_code=503, 
+            detail="Redis服务暂时不可用，请稍后重试。"
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500, 
+            detail="任务结果数据损坏。"
+        )
+    
+# 添加健康检查端点
+@app.get("/health", tags=["Health Check"])
+async def health_check():
+    """
+    健康检查端点，包含Redis连接状态
+    """
+    redis_status = await redis_manager.get_connection_status()
+    redis_ping = await redis_manager.ping()
+    
+    return {
+        "status": "ok" if redis_ping else "degraded",
+        "message": "欢迎使用AI配餐模型 API v1.0",
+        "redis": {
+            "connected": redis_ping,
+            "status": redis_status
+        },
+        "timestamp": time.time()
+    }
+
+
+# 添加Redis状态端点
+@app.get("/api/v1/redis/status", tags=["Health Check"])
+async def redis_status():
+    """
+    详细的Redis状态信息
+    """
+    status = await redis_manager.get_connection_status()
+    ping_result = await redis_manager.ping()
+    
+    return {
+        "connection_status": status,
+        "ping_successful": ping_result,
+        "timestamp": time.time()
+    }
 
 
 @app.get("/", tags=["Health Check"])

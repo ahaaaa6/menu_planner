@@ -3,6 +3,7 @@
 import os
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from typing import ClassVar
 
 class GAConfig(BaseSettings):
     """遗传算法相关配置"""
@@ -23,7 +24,7 @@ class GAConfig(BaseSettings):
 
 class RedisConfig(BaseSettings):
     """Redis 缓存配置"""
-    host: str = Field(os.getenv("REDIS_HOST", "localhost"), description="Redis 主机")
+    host: str = Field(os.getenv("APP_REDIS_HOST", "localhost"), description="Redis 主机")   
     port: int = Field(int(os.getenv("APP_REDIS_PORT", 6379)), description="Redis 端口")
     db: int = Field(int(os.getenv("APP_REDIS_DB", 0)), description="Redis 数据库")
     menu_cache_ttl_seconds: int = Field(int(os.getenv("APP_REDIS_MENU_CACHE_TTL_SECONDS", 36000)), description="菜单缓存过期时间（秒）")
@@ -44,11 +45,11 @@ class AppConfig(BaseSettings):
     # 进程池配置
     # 'N-1' 策略
     # 确保核心数至少为1
-    cpu_cores = os.cpu_count() or 1
-    default_workers = max(1, cpu_cores - 1) 
+    cpu_cores: ClassVar[int] = os.cpu_count() or 1
+    default_workers: ClassVar[int] = max(1, cpu_cores - 1) 
 
     process_pool_max_workers: int = Field(
-        int(os.getenv("APP_PROCESS_POOL_MAX_WORKERS", os.cpu_count() or 1)),
+        int(os.getenv("APP_PROCESS_POOL_MAX_WORKERS", default_workers)), # <-- 使用计算好的 default_workers
         description="处理遗传算法的进程池最大工作进程数"
     )
 

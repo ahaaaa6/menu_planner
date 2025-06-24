@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-pydantic
-deap
-redis
-httpx
-pandas
-pydantic-settings
-psutil
