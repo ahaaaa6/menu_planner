@@ -182,11 +182,21 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # 同时，更新方案缓存
+        # --- 修复：确保缓存数据结构正确 ---
         plan_cache_key = create_plan_cache_key(request)
         cache_data = {
             "plans": [res.model_dump() for res in menu_results]
         }
+        
+        # 验证缓存数据结构（调试用）
+        try:
+            for i, plan_data in enumerate(cache_data["plans"]):
+                MenuResponse(**plan_data)  # 验证结构
+            logger.debug(f"缓存数据结构验证通过，包含 {len(cache_data['plans'])} 个方案")
+        except Exception as validation_error:
+            logger.error(f"准备缓存的数据结构验证失败: {validation_error}")
+            # 可以选择不缓存这次的结果，或者修复数据结构
+            cache_data = None
 
         # 使用重试逻辑保存结果
         task_saved = await redis_manager.set(
@@ -195,11 +205,14 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             ex=3600
         )
         
-        cache_saved = await redis_manager.set(
-            plan_cache_key, 
-            json.dumps(cache_data), 
-            ex=settings.redis.plan_cache_ttl_seconds
-        )
+        # 只有当缓存数据有效时才保存
+        cache_saved = False
+        if cache_data:
+            cache_saved = await redis_manager.set(
+                plan_cache_key, 
+                json.dumps(cache_data), 
+                ex=settings.redis.plan_cache_ttl_seconds
+            )
 
         if task_saved:
             logger.info(f"Task {task_id}: 成功完成并保存任务结果。")
@@ -248,13 +261,39 @@ async def submit_menu_plan(
         try:
             cached_plan_json = await redis_manager.get(plan_cache_key)
             if cached_plan_json:
-                # --- 解决方案: 正确处理缓存数据 ---
-                cached_data = json.loads(cached_plan_json)
-                plans_list = cached_data.get("plans", [])
-                logger.info(f"方案缓存命中，从缓存中返回 {len(plans_list)} 个方案。")
-                return MenuPlanCachedResponse(plans=plans_list)
+                logger.info("方案缓存命中，立即返回结果。")
+                # --- 修复：正确处理缓存数据验证 ---
+                try:
+                    cached_data = json.loads(cached_plan_json)
+                    # 验证缓存数据结构
+                    if "plans" in cached_data and isinstance(cached_data["plans"], list):
+                        # 尝试将每个plan转换为MenuResponse对象以验证结构
+                        validated_plans = []
+                        for plan_data in cached_data["plans"]:
+                            try:
+                                # 验证单个菜单方案的数据结构
+                                menu_response = MenuResponse(**plan_data)
+                                validated_plans.append(menu_response)
+                            except Exception as validation_error:
+                                logger.warning(f"缓存中的菜单方案数据验证失败: {validation_error}")
+                                # 如果有任何一个方案验证失败，就跳过缓存
+                                raise ValueError("缓存数据验证失败")
+                        
+                        logger.info(f"方案缓存命中，从缓存中返回 {len(validated_plans)} 个方案。")
+                        return MenuPlanCachedResponse(plans=validated_plans)
+                    else:
+                        logger.warning("缓存数据格式不正确，缺少'plans'字段或格式错误")
+                        raise ValueError("缓存数据格式错误")
+                        
+                except (json.JSONDecodeError, ValueError, TypeError) as parse_error:
+                    logger.warning(f"读取缓存失败: {parse_error}")
+                    # 删除损坏的缓存
+                    await redis_manager.delete(plan_cache_key)
+                    logger.info("已删除损坏的缓存数据")
         except Exception as e:
             logger.warning(f"读取缓存失败: {e}")
+            # 确保即使缓存读取失败，也能继续处理请求
+            pass
     
     # 2. 创建新任务
     task_id = str(uuid.uuid4())
@@ -263,7 +302,7 @@ async def submit_menu_plan(
     else:
         logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")
 
-    # 3. 标记任务正在处理中
+   # 3. 标记任务正在处理中
     task_result_key = f"task_result:{task_id}"
     processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
     
