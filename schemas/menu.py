@@ -110,3 +110,9 @@ class PlanResultError(BaseModel):
 
 # 使用联合类型，让FastAPI能够根据内容自动选择正确的模型
 PlanResultResponse = Union[PlanResultSuccess, PlanResultProcessing, PlanResultError]
+
+class MenuPlanCachedResponse(BaseModel):
+    """
+    当方案缓存命中时，直接返回的包含多个菜单方案的响应体。
+    """
+    plans: List[MenuResponse] = Field(..., description="缓存中存储的推荐菜单方案列表")

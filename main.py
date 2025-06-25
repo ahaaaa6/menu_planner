@@ -10,9 +10,15 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import List, Union
 from fastapi import FastAPI, HTTPException, Body, BackgroundTasks, Path, Request as FastAPIRequest
 from .schemas.menu import (
-    MenuRequest, MenuResponse, PlanTaskSubmitResponse, PlanResultResponse, 
-    PlanResultSuccess, 
-    PlanResultProcessing, PlanResultError
+    MenuRequest, 
+    PlanTaskSubmitResponse, 
+    MenuResponse, 
+    MenuPlanCachedResponse,
+    # --- 解决方案: 导入所有需要的模型 ---
+    PlanResultSuccess,
+    PlanResultError,
+    PlanResultProcessing,
+    PlanResultResponse
 )
 from .services.menu_fetcher import get_dishes_for_restaurant, preprocess_menu
 from .services.genetic_planner import plan_menu_async
@@ -113,7 +119,7 @@ api_description = """
 -   **`ignore_cache: false` (默认)**:
     - 当您提交任务时，系统会根据您请求的**所有参数**（如人数、预算、口味、忌口等）生成一个唯一的标识。
     - 系统会用此标识**优先在缓存中查找**是否已有完全匹配的、计算好的菜单方案。
-    - **如果命中缓存**，API将**立即返回完整的菜单方案**，状态为 `SUCCESS`，整个过程几乎没有延迟，也不会创建新的后台任务。
+    - **如果命中缓存**，API将**立即返回完整的菜单方案**，整个过程几乎没有延迟，也不会创建新的后台任务。
     - **如果未命中缓存**，系统才会创建新任务，并返回 `task_id` 供您后续查询。
 
 -   **`ignore_cache: true`**:
@@ -224,7 +230,8 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             logger.error(f"Task {task_id}: 无法保存错误信息到Redis。")
 
 # --- 主要API端点 ---
-@app.post("/api/v1/plan-menu", response_model=Union[PlanTaskSubmitResponse, MenuResponse], tags=["Menu Planning (Async)"])
+@app.post("/api/v1/plan-menu", response_model=Union[PlanTaskSubmitResponse, MenuPlanCachedResponse], 
+    tags=["Menu Planning (Async)"],)
 async def submit_menu_plan(
     request: MenuRequest = Body(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
@@ -236,24 +243,25 @@ async def submit_menu_plan(
     logger.info(f"收到配餐请求: 餐厅={request.restaurant_id}, 人数={request.diner_count}, 预算={request.total_budget}")
     
     # 1. 检查缓存（如果用户未要求忽略缓存）
-    cached_plan_json = None
     if not request.ignore_cache:
         plan_cache_key = create_plan_cache_key(request)
         try:
             cached_plan_json = await redis_manager.get(plan_cache_key)
             if cached_plan_json:
-                logger.info(f"方案缓存命中，立即返回结果。")
+                # --- 解决方案: 正确处理缓存数据 ---
                 cached_data = json.loads(cached_plan_json)
-                return MenuResponse(plans=cached_data["plans"])
+                plans_list = cached_data.get("plans", [])
+                logger.info(f"方案缓存命中，从缓存中返回 {len(plans_list)} 个方案。")
+                return MenuPlanCachedResponse(plans=plans_list)
         except Exception as e:
             logger.warning(f"读取缓存失败: {e}")
     
     # 2. 创建新任务
     task_id = str(uuid.uuid4())
-    if cached_plan_json and request.ignore_cache:
-        logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")
-    else:
+    if not request.ignore_cache:
         logger.info(f"方案缓存未命中。创建新任务: {task_id}")
+    else:
+        logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")
 
     # 3. 标记任务正在处理中
     task_result_key = f"task_result:{task_id}"
