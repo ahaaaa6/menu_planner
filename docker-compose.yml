@@ -22,7 +22,7 @@ services:
           memory: 512m
           cpus: '0.5'
         reservations:
-          memory: 256m
+          memory: 128m
           cpus: '0.25'
     # 注意：Swarm 模式下 healthcheck 语法略有不同
     healthcheck:
@@ -70,14 +70,14 @@ services:
     networks:
       - menu-network
     environment:
-      # Redis 配置 - 修正环境变量名称
-      - APP_REDIS_HOST=redis
-      - APP_REDIS_PORT=6379
-      - APP_REDIS_DB=0
-      - APP_REDIS_MENU_CACHE_TTL_SECONDS=36000
-      - APP_REDIS_PLAN_CACHE_TTL_SECONDS=36000
-      # Mock API 配置 - 修正变量名
-      - MOCK_DISH_API_URL=http://mock-api:8001
+      # Redis 配置
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_MENU_CACHE_TTL_SECONDS=36000
+      - REDIS_PLAN_CACHE_TTL_SECONDS=36000
+      # Mock API 配置 
+      - MOCK_API_URL=http://mock-api:8001
       # 其他配置
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -101,10 +101,10 @@ services:
         window: 120s
       resources:
         limits:
-          memory: 2g
-          cpus: '1.0'
+          memory: 4g
+          cpus: '4.0'
         reservations:
-          memory: 1g
+          memory: 512m
           cpus: '0.5'
     command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
     healthcheck:
