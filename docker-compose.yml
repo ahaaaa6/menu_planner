@@ -1,6 +1,6 @@
 # 服务器部署版 docker-compose.yml (重启机制优化版)
 # 适用于 Docker Swarm 集群部署
-
+version: '3.9'
 services:
   # Redis 服务
   redis:
