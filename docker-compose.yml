@@ -106,16 +106,7 @@ services:
         reservations:
           memory: 512m
           cpus: '0.5'
-    command: >
-      sh -c "
-        echo '--------------------------------------------'
-        echo '--- 容器内部环境变量检查 ---'
-        echo 'REDIS_HOST (from env) = $REDIS_HOST'
-        echo 'MOCK_API_URL (from env) = $MOCK_API_URL'
-        echo '--- 检查结束，即将启动应用 ---'
-        echo '--------------------------------------------' &&
-        uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
-      "
+    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
       interval: 30s
