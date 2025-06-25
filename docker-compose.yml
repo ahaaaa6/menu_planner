@@ -1,111 +1,122 @@
-# 服务器部署版 docker-compose.yml (重启机制优化版)
-# 适用于 Docker Swarm 集群部署
 version: '3.9'
+
 services:
-  # Redis 服务
-  redis:
-    image: "redis:alpine"
-    networks:
-      - menu-network
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: any  # 改为 any，任何情况下都重启
-        delay: 5s
-        max_attempts: 0  # 设为 0 表示无限重试
-        window: 120s
-      resources:
-        limits:
-          memory: 512m
-          cpus: '0.5'
-        reservations:
-          memory: 128m
-          cpus: '0.25'
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
-  # Mock API 服务
-  mock-api:
-    image: erikhowe/mock-api:1.6
-    networks:
-      - menu-network
-    environment:
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: any  # 改为 any
-        delay: 5s
-        max_attempts: 0  # 无限重试
-        window: 120s
-      resources:
-        limits:
-          memory: 256m
-          cpus: '0.25'
-        reservations:
-          memory: 128m
-          cpus: '0.1'
-    command: uvicorn menu_planner.mock_dish_api:app --host 0.0.0.0 --port 8001
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001').getcode()"]
-      interval: 15s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # 主应用服务
   menu-planner-app:
     image: erikhowe/menu-planner-app:1.6
+    command:
+      - uvicorn
+      - menu_planner.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
     ports:
       - "8000:8000"
+    environment:
+      APP_REDIS_DB: "0"
+      APP_REDIS_HOST: redis
+      APP_REDIS_MENU_CACHE_TTL_SECONDS: "36000"
+      APP_REDIS_PLAN_CACHE_TTL_SECONDS: "36000"
+      APP_REDIS_PORT: "6379"
+      MOCK_DISH_API_URL: http://mock-api:8001
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
     networks:
       - menu-network
-    environment:
-      - APP_REDIS_HOST=redis
-      - APP_REDIS_PORT=6379
-      - APP_REDIS_DB=0
-      - APP_REDIS_MENU_CACHE_TTL_SECONDS=36000
-      - APP_REDIS_PLAN_CACHE_TTL_SECONDS=36000
-      - MOCK_DISH_API_URL=http://mock-api:8001
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
+    depends_on:
+      - redis
+      - mock-api
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 60s
     deploy:
       replicas: 2
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
         failure_action: rollback
         monitor: 60s
+        order: start-first
       rollback_config:
         parallelism: 1
         delay: 10s
         failure_action: pause
         monitor: 60s
-      restart_policy:
-        condition: any  # 改为 any
-        delay: 5s
-        max_attempts: 0  # 无限重试
-        window: 120s
       resources:
         limits:
-          memory: 4g
-          cpus: '4.0'
+          cpus: '4'
+          memory: 4G
         reservations:
-          memory: 512m
           cpus: '0.5'
-    command: uvicorn menu_planner.main:app --host 0.0.0.0 --port 8000
+          memory: 512M
+      restart_policy:
+        condition: on-failure  # 只在失败时重启
+        delay: 10s            # 增加延迟时间
+        max_attempts: 5       # 限制重试次数
+        window: 300s          # 5分钟窗口期
+
+  mock-api:
+    image: erikhowe/mock-api:1.6
+    command:
+      - uvicorn
+      - menu_planner.mock_dish_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - menu-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
-      interval: 30s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001').getcode()"]
       timeout: 10s
+      interval: 15s
       retries: 3
-      start_period: 60s
+      start_period: 40s
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'        # 增加CPU限制
+          memory: 512M       # 增加内存限制
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 180s         # 3分钟窗口期
+
+  redis:
+    image: redis:alpine
+    networks:
+      - menu-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      interval: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s         # 2分钟窗口期
 
 networks:
   menu-network:
