@@ -1,4 +1,4 @@
-# 服务器部署版 docker-compose.yml (最終修正版)
+# 服务器部署版 docker-compose.yml (重启机制优化版)
 # 适用于 Docker Swarm 集群部署
 
 services:
@@ -10,9 +10,9 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any  # 改为 any，任何情况下都重启
         delay: 5s
-        max_attempts: 3
+        max_attempts: 0  # 设为 0 表示无限重试
         window: 120s
       resources:
         limits:
@@ -39,9 +39,9 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any  # 改为 any
         delay: 5s
-        max_attempts: 3
+        max_attempts: 0  # 无限重试
         window: 120s
       resources:
         limits:
@@ -88,9 +88,9 @@ services:
         failure_action: pause
         monitor: 60s
       restart_policy:
-        condition: on-failure
+        condition: any  # 改为 any
         delay: 5s
-        max_attempts: 3
+        max_attempts: 0  # 无限重试
         window: 120s
       resources:
         limits:
