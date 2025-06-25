@@ -5,6 +5,7 @@ import uuid
 import time
 import psutil
 import hashlib
+import asyncio  # <-- 新增导入
 from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
 from typing import List, Union
@@ -152,6 +153,8 @@ async def run_planning_task(request: MenuRequest, task_id: str):
     后台任务执行函数，带Redis重试逻辑
     """
     task_result_key = f"task_result:{task_id}"
+    plan_cache_key = create_plan_cache_key(request) # <--- 修改点：在任务开始时也获取缓存键
+
     try:
         # 1. 获取和预处理菜品
         all_dishes = await get_dishes_for_restaurant(request.restaurant_id)
@@ -182,21 +185,9 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # 4. 准备方案缓存数据 - 修复：正确的数据结构
-        plan_cache_key = create_plan_cache_key(request)
-        # 直接存储 MenuResponse 对象列表，而不是嵌套在 plans 字段中
+        # 4. 准备方案缓存数据
         cache_data = [res.model_dump() for res in menu_results]
         
-        # 验证缓存数据结构（调试用）
-        try:
-            for i, plan_data in enumerate(cache_data):
-                MenuResponse(**plan_data)  # 验证结构
-            logger.debug(f"缓存数据结构验证通过，包含 {len(cache_data)} 个方案")
-        except Exception as validation_error:
-            logger.error(f"准备缓存的数据结构验证失败: {validation_error}")
-            # 如果验证失败，就不缓存这次的结果
-            cache_data = None
-
         # 使用重试逻辑保存结果
         task_saved = await redis_manager.set(
             task_result_key, 
@@ -204,14 +195,12 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             ex=3600
         )
         
-        # 只有当缓存数据有效时才保存
-        cache_saved = False
-        if cache_data is not None:
-            cache_saved = await redis_manager.set(
-                plan_cache_key, 
-                json.dumps(cache_data), 
-                ex=settings.redis.plan_cache_ttl_seconds
-            )
+        # 将最终结果写入方案缓存，这会覆盖掉之前的“处理中”标记
+        cache_saved = await redis_manager.set(
+            plan_cache_key, 
+            json.dumps(cache_data), 
+            ex=settings.redis.plan_cache_ttl_seconds
+        )
 
         if task_saved:
             logger.info(f"Task {task_id}: 成功完成并保存任务结果。")
@@ -219,7 +208,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             logger.warning(f"Task {task_id}: 任务完成但无法保存到Redis。")
             
         if cache_saved:
-            logger.info(f"Task {task_id}: 方案缓存已更新。")
+            logger.info(f"Task {task_id}: 方案缓存已更新，锁已释放。")
         else:
             logger.warning(f"Task {task_id}: 无法更新方案缓存。")
 
@@ -232,14 +221,13 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         ).model_dump_json()
         
         # 尝试保存错误信息
-        error_saved = await redis_manager.set(
-            task_result_key, 
-            error_data, 
-            ex=3600
-        )
+        await redis_manager.set(task_result_key, error_data, ex=3600)
         
-        if not error_saved:
-            logger.error(f"Task {task_id}: 无法保存错误信息到Redis。")
+        # <--- 修改点：任务失败时，删除锁，以防死锁 --->
+        # 这样其他请求可以重新尝试，而不是一直等待一个失败的任务
+        await redis_manager.delete(plan_cache_key)
+        logger.info(f"Task {task_id}: 任务失败，已清理方案缓存锁。Key: {plan_cache_key}")
+
 
 # --- 主要API端点 ---
 @app.post("/api/v1/plan-menu", response_model=Union[PlanTaskSubmitResponse, MenuPlanCachedResponse], 
@@ -250,75 +238,105 @@ async def submit_menu_plan(
     fastapi_request: FastAPIRequest = None
 ):
     """
-    提交配餐任务（异步模式）
+    提交配餐任务（异步模式）- 并发安全版
     """
     logger.info(f"收到配餐请求: 餐厅={request.restaurant_id}, 人数={request.diner_count}, 预算={request.total_budget}")
-    
-    # 1. 检查缓存（如果用户未要求忽略缓存）
-    if not request.ignore_cache:
-        plan_cache_key = create_plan_cache_key(request)
+
+    # --- 强制忽略缓存的逻辑 ---
+    if request.ignore_cache:
+        logger.info("用户请求忽略缓存。强制创建新任务。")
+        task_id = str(uuid.uuid4())
+        task_result_key = f"task_result:{task_id}"
+        processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
         try:
-            cached_plan_json = await redis_manager.get(plan_cache_key)
-            if cached_plan_json:
-                logger.info("方案缓存命中，准备返回结果。")
-                # 修复：正确处理缓存数据结构
-                try:
-                    cached_data = json.loads(cached_plan_json)
-                    
-                    # 确保 cached_data 是一个列表
-                    if not isinstance(cached_data, list):
-                        logger.warning("缓存数据不是列表格式，删除损坏的缓存")
-                        await redis_manager.delete(plan_cache_key)
-                        raise ValueError("缓存数据格式错误")
-                    
-                    # 验证每个方案的数据结构
-                    validated_plans = []
-                    for plan_data in cached_data:
-                        try:
-                            # 验证单个菜单方案的数据结构
-                            menu_response = MenuResponse(**plan_data)
-                            validated_plans.append(menu_response)
-                        except Exception as validation_error:
-                            logger.warning(f"缓存中的菜单方案数据验证失败: {validation_error}")
-                            # 如果有任何一个方案验证失败，就跳过缓存
-                            raise ValueError("缓存数据验证失败")
-                    
-                    logger.info(f"方案缓存命中，从缓存中返回 {len(validated_plans)} 个方案。")
-                    return MenuPlanCachedResponse(plans=validated_plans)
-                    
-                except (json.JSONDecodeError, ValueError, TypeError) as parse_error:
-                    logger.warning(f"解析缓存数据失败: {parse_error}")
-                    # 删除损坏的缓存
-                    await redis_manager.delete(plan_cache_key)
-                    logger.info("已删除损坏的缓存数据")
+            await redis_manager.set(task_result_key, processing_data, ex=3600)
+            background_tasks.add_task(run_planning_task, request, task_id)
+            result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
+            return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
         except Exception as e:
-            logger.warning(f"读取缓存失败: {e}")
-            # 确保即使缓存读取失败，也能继续处理请求
-            pass
-    
-    # 2. 创建新任务
-    task_id = str(uuid.uuid4())
-    if not request.ignore_cache:
-        logger.info(f"方案缓存未命中。创建新任务: {task_id}")
-    else:
-        logger.info(f"用户请求忽略缓存。创建新任务: {task_id}")
+            logger.error(f"无法保存任务状态到Redis: {e}")
+            raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后重试。")
 
-   # 3. 标记任务正在处理中
-    task_result_key = f"task_result:{task_id}"
-    processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
-    
+    # --- 带分布式锁的缓存逻辑 ---
+    plan_cache_key = create_plan_cache_key(request)
+
+    # 1. 检查缓存中是否已有最终结果或正在处理的标记
     try:
-        await redis_manager.set(task_result_key, processing_data, ex=3600)
-    except Exception as e:
-        logger.error(f"无法保存任务状态到Redis: {e}")
-        raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后重试。")
+        cached_value_json = await redis_manager.get(plan_cache_key)
+        if cached_value_json:
+            cached_data = json.loads(cached_value_json)
+            
+            # Case A: 缓存的是最终结果 (一个列表)
+            if isinstance(cached_data, list):
+                logger.info(f"方案缓存命中最终结果。Key: {plan_cache_key}")
+                validated_plans = [MenuResponse(**p) for p in cached_data]
+                return MenuPlanCachedResponse(plans=validated_plans)
 
-    # 4. 将耗时任务添加到后台
-    background_tasks.add_task(run_planning_task, request, task_id)
-    
-    # 5. 立即返回任务ID
-    result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
-    return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
+            # Case B: 缓存的是"处理中"标记 (一个字典)
+            if isinstance(cached_data, dict) and cached_data.get("status") == "PROCESSING":
+                existing_task_id = cached_data.get("task_id")
+                logger.info(f"方案缓存命中“处理中”标记，返回现有任务ID: {existing_task_id}")
+                result_url = fastapi_request.url_for('get_menu_plan_result', task_id=existing_task_id)
+                return PlanTaskSubmitResponse(task_id=existing_task_id, status="PENDING", result_url=str(result_url))
+
+            # 如果数据格式不正确，则删除
+            logger.warning(f"缓存数据格式不正确，删除损坏的缓存。Key: {plan_cache_key}")
+            await redis_manager.delete(plan_cache_key)
+            
+    except (RedisConnectionError, json.JSONDecodeError, TypeError, ValueError) as e:
+        logger.warning(f"检查缓存时发生错误或格式不匹配，将继续尝试创建任务: {e}")
+        # 出错则继续向下执行，尝试获取锁并创建新任务
+        pass
+
+    # 2. 尝试获取锁并创建新任务
+    task_id = str(uuid.uuid4())
+    processing_marker = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
+
+    try:
+        # 使用 SET NX 原子操作获取锁，锁的有效期为10分钟，防止任务异常导致死锁
+        lock_acquired = await redis_manager.set(
+            plan_cache_key,
+            processing_marker,
+            ex=600, 
+            nx=True
+        )
+
+        if lock_acquired:
+            # 成功获取锁，创建新任务
+            logger.info(f"成功获取分布式锁。创建新任务: {task_id} for key: {plan_cache_key}")
+            task_result_key = f"task_result:{task_id}"
+            await redis_manager.set(task_result_key, processing_marker, ex=3600)
+            background_tasks.add_task(run_planning_task, request, task_id)
+            result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
+            return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
+
+        else:
+            # 获取锁失败，说明另一进程已抢先。等待一小会再读取“处理中”标记
+            logger.info(f"获取锁失败，另一进程已抢先。等待并读取现有任务ID...")
+            await asyncio.sleep(0.1) 
+            
+            existing_marker_json = await redis_manager.get(plan_cache_key)
+            if existing_marker_json:
+                try:
+                    existing_marker = json.loads(existing_marker_json)
+                    if isinstance(existing_marker, dict) and existing_marker.get("status") == "PROCESSING":
+                        existing_task_id = existing_marker.get("task_id")
+                        logger.info(f"成功读取到现有任务ID: {existing_task_id}")
+                        result_url = fastapi_request.url_for('get_menu_plan_result', task_id=existing_task_id)
+                        return PlanTaskSubmitResponse(task_id=existing_task_id, status="PENDING", result_url=str(result_url))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass # 如果读取时数据损坏，则让客户端重试
+
+            # 如果到这里，说明锁被占用但无法读到有效信息，这是异常情况
+            logger.error(f"锁状态严重不一致，请检查系统。Key: {plan_cache_key}")
+            raise HTTPException(status_code=409, detail="请求冲突，请稍后重试。")
+
+    except RedisConnectionError as e:
+        logger.error(f"处理分布式锁时Redis出错: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后重试。")
+    except Exception as e:
+        logger.error(f"创建任务时发生未知错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误。")
 
 
 @app.get("/api/v1/plan-menu/results/{task_id}", response_model=PlanResultResponse, tags=["Menu Planning (Async)"])
