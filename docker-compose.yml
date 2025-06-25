@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   menu-planner-app:
-    image: erikhowe/menu-planner-app:1.6
+    image: erikhowe/menu-planner-app:1.7
     command:
       - uvicorn
       - menu_planner.main:app
@@ -59,7 +59,7 @@ services:
         window: 300s          # 5分钟窗口期
 
   mock-api:
-    image: erikhowe/mock-api:1.6
+    image: erikhowe/mock-api:1.7
     command:
       - uvicorn
       - menu_planner.mock_dish_api:app
