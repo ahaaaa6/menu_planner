@@ -71,13 +71,13 @@ services:
       - menu-network
     environment:
       # Redis 配置
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_MENU_CACHE_TTL_SECONDS=36000
-      - REDIS_PLAN_CACHE_TTL_SECONDS=36000
+      - APP_REDIS_HOST=redis
+      - APP_REDIS_PORT=6379
+      - APP_REDIS_DB=0
+      - APP_REDIS_MENU_CACHE_TTL_SECONDS=36000
+      - APP_REDIS_PLAN_CACHE_TTL_SECONDS=36000
       # Mock API 配置 
-      - MOCK_API_URL=http://mock-api:8001
+      - MOCK_DISH_API_URL=http://mock-api:8001 
       # 其他配置
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
