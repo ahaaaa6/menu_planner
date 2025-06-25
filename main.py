@@ -182,18 +182,16 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # 4. 准备方案缓存数据 - 修复：使用 MenuPlanCachedResponse 结构
+        # 4. 准备方案缓存数据 - 修复：正确的数据结构
         plan_cache_key = create_plan_cache_key(request)
-        
-        # 使用正确的缓存数据结构
-        cache_response = MenuPlanCachedResponse(plans=menu_results)
-        cache_data = cache_response.model_dump_json()
+        # 直接存储 MenuResponse 对象列表，而不是嵌套在 plans 字段中
+        cache_data = [res.model_dump() for res in menu_results]
         
         # 验证缓存数据结构（调试用）
         try:
-            # 验证能否正确反序列化
-            test_parse = MenuPlanCachedResponse.model_validate_json(cache_data)
-            logger.debug(f"缓存数据结构验证通过，包含 {len(test_parse.plans)} 个方案")
+            for i, plan_data in enumerate(cache_data):
+                MenuResponse(**plan_data)  # 验证结构
+            logger.debug(f"缓存数据结构验证通过，包含 {len(cache_data)} 个方案")
         except Exception as validation_error:
             logger.error(f"准备缓存的数据结构验证失败: {validation_error}")
             # 如果验证失败，就不缓存这次的结果
@@ -211,7 +209,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         if cache_data is not None:
             cache_saved = await redis_manager.set(
                 plan_cache_key, 
-                cache_data, 
+                json.dumps(cache_data), 
                 ex=settings.redis.plan_cache_ttl_seconds
             )
 
@@ -263,14 +261,32 @@ async def submit_menu_plan(
             cached_plan_json = await redis_manager.get(plan_cache_key)
             if cached_plan_json:
                 logger.info("方案缓存命中，准备返回结果。")
+                # 修复：正确处理缓存数据结构
                 try:
-                    # 修复：使用正确的模型解析缓存数据
-                    cached_response = MenuPlanCachedResponse.model_validate_json(cached_plan_json)
+                    cached_data = json.loads(cached_plan_json)
                     
-                    logger.info(f"方案缓存命中，从缓存中返回 {len(cached_response.plans)} 个方案。")
-                    return cached_response
+                    # 确保 cached_data 是一个列表
+                    if not isinstance(cached_data, list):
+                        logger.warning("缓存数据不是列表格式，删除损坏的缓存")
+                        await redis_manager.delete(plan_cache_key)
+                        raise ValueError("缓存数据格式错误")
                     
-                except Exception as parse_error:
+                    # 验证每个方案的数据结构
+                    validated_plans = []
+                    for plan_data in cached_data:
+                        try:
+                            # 验证单个菜单方案的数据结构
+                            menu_response = MenuResponse(**plan_data)
+                            validated_plans.append(menu_response)
+                        except Exception as validation_error:
+                            logger.warning(f"缓存中的菜单方案数据验证失败: {validation_error}")
+                            # 如果有任何一个方案验证失败，就跳过缓存
+                            raise ValueError("缓存数据验证失败")
+                    
+                    logger.info(f"方案缓存命中，从缓存中返回 {len(validated_plans)} 个方案。")
+                    return MenuPlanCachedResponse(plans=validated_plans)
+                    
+                except (json.JSONDecodeError, ValueError, TypeError) as parse_error:
                     logger.warning(f"解析缓存数据失败: {parse_error}")
                     # 删除损坏的缓存
                     await redis_manager.delete(plan_cache_key)
