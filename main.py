@@ -182,20 +182,19 @@ async def run_planning_task(request: MenuRequest, task_id: str):
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # --- 修复：确保缓存数据结构正确 ---
+        # 4. 准备方案缓存数据 - 修复：正确的数据结构
         plan_cache_key = create_plan_cache_key(request)
-        cache_data = {
-            "plans": [res.model_dump() for res in menu_results]
-        }
+        # 直接存储 MenuResponse 对象列表，而不是嵌套在 plans 字段中
+        cache_data = [res.model_dump() for res in menu_results]
         
         # 验证缓存数据结构（调试用）
         try:
-            for i, plan_data in enumerate(cache_data["plans"]):
+            for i, plan_data in enumerate(cache_data):
                 MenuResponse(**plan_data)  # 验证结构
-            logger.debug(f"缓存数据结构验证通过，包含 {len(cache_data['plans'])} 个方案")
+            logger.debug(f"缓存数据结构验证通过，包含 {len(cache_data)} 个方案")
         except Exception as validation_error:
             logger.error(f"准备缓存的数据结构验证失败: {validation_error}")
-            # 可以选择不缓存这次的结果，或者修复数据结构
+            # 如果验证失败，就不缓存这次的结果
             cache_data = None
 
         # 使用重试逻辑保存结果
@@ -207,7 +206,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         
         # 只有当缓存数据有效时才保存
         cache_saved = False
-        if cache_data:
+        if cache_data is not None:
             cache_saved = await redis_manager.set(
                 plan_cache_key, 
                 json.dumps(cache_data), 
@@ -261,32 +260,34 @@ async def submit_menu_plan(
         try:
             cached_plan_json = await redis_manager.get(plan_cache_key)
             if cached_plan_json:
-                logger.info("方案缓存命中，立即返回结果。")
-                # --- 修复：正确处理缓存数据验证 ---
+                logger.info("方案缓存命中，准备返回结果。")
+                # 修复：正确处理缓存数据结构
                 try:
                     cached_data = json.loads(cached_plan_json)
-                    # 验证缓存数据结构
-                    if "plans" in cached_data and isinstance(cached_data["plans"], list):
-                        # 尝试将每个plan转换为MenuResponse对象以验证结构
-                        validated_plans = []
-                        for plan_data in cached_data["plans"]:
-                            try:
-                                # 验证单个菜单方案的数据结构
-                                menu_response = MenuResponse(**plan_data)
-                                validated_plans.append(menu_response)
-                            except Exception as validation_error:
-                                logger.warning(f"缓存中的菜单方案数据验证失败: {validation_error}")
-                                # 如果有任何一个方案验证失败，就跳过缓存
-                                raise ValueError("缓存数据验证失败")
-                        
-                        logger.info(f"方案缓存命中，从缓存中返回 {len(validated_plans)} 个方案。")
-                        return MenuPlanCachedResponse(plans=validated_plans)
-                    else:
-                        logger.warning("缓存数据格式不正确，缺少'plans'字段或格式错误")
+                    
+                    # 确保 cached_data 是一个列表
+                    if not isinstance(cached_data, list):
+                        logger.warning("缓存数据不是列表格式，删除损坏的缓存")
+                        await redis_manager.delete(plan_cache_key)
                         raise ValueError("缓存数据格式错误")
-                        
+                    
+                    # 验证每个方案的数据结构
+                    validated_plans = []
+                    for plan_data in cached_data:
+                        try:
+                            # 验证单个菜单方案的数据结构
+                            menu_response = MenuResponse(**plan_data)
+                            validated_plans.append(menu_response)
+                        except Exception as validation_error:
+                            logger.warning(f"缓存中的菜单方案数据验证失败: {validation_error}")
+                            # 如果有任何一个方案验证失败，就跳过缓存
+                            raise ValueError("缓存数据验证失败")
+                    
+                    logger.info(f"方案缓存命中，从缓存中返回 {len(validated_plans)} 个方案。")
+                    return MenuPlanCachedResponse(plans=validated_plans)
+                    
                 except (json.JSONDecodeError, ValueError, TypeError) as parse_error:
-                    logger.warning(f"读取缓存失败: {parse_error}")
+                    logger.warning(f"解析缓存数据失败: {parse_error}")
                     # 删除损坏的缓存
                     await redis_manager.delete(plan_cache_key)
                     logger.info("已删除损坏的缓存数据")
