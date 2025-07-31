@@ -7,8 +7,8 @@ from typing import ClassVar
 
 class GAConfig(BaseSettings):
     """遗传算法相关配置"""
-    population_size: int = Field(int(os.getenv("APP_GA_POPULATION_SIZE", 50)), description="种群大小")
-    generations: int = Field(int(os.getenv("APP_GA_GENERATIONS", 40)), description="迭代代数")
+    population_size: int = Field(int(os.getenv("APP_GA_POPULATION_SIZE", 100)), description="种群大小")
+    generations: int = Field(int(os.getenv("APP_GA_GENERATIONS", 100)), description="迭代代数")
     crossover_rate: float = Field(float(os.getenv("APP_GA_CROSSOVER_RATE", 0.8)), description="交叉概率")
     mutation_rate: float = Field(float(os.getenv("APP_GA_MUTATION_RATE", 0.2)), description="变异概率")
     hall_of_fame_size: int = Field(int(os.getenv("APP_GA_HALL_OF_FAME_SIZE", 3)), description="名人堂大小，即返回的最优解数量")

@@ -17,13 +17,13 @@ class Dish(BaseModel):
     price: float
     cooking_methods: List[str]
     flavor_tags: List[str]
-    is_vegetarian: bool 
+    is_vegetarian: bool
     is_halal: bool
     main_ingredient: List[str]
 
     final_price: Optional[float] = None
     contribution_to_dish_count: Optional[int] = None
-    
+
     class Config:
         populate_by_name = True
 
@@ -33,25 +33,51 @@ class MenuRequest(BaseModel):
     定义了客户端发起排菜请求时的JSON结构。
     FastAPI会用它来校验入参。
     """
- 
-    restaurant_id: str = Field(..., description="餐厅ID")
     diner_count: int = Field(..., gt=0, description="就餐人数")
     total_budget: float = Field(..., gt=0, description="总预算")
-    dietary_restrictions: List[str] = Field([], description="饮食限制, 如: ['VEGETARIAN', 'HALAL', 'NO_SPICY']")
-    ignore_cache: bool = Field(False, description="用于判断是否调取缓存")
+    dishes: List[Dish] = Field(..., description="用于配餐的所有可用菜品列表")
+    ignore_cache: bool = Field(False, description="是否忽略方案缓存，强制重新计算")
 
     model_config = {
         "json_schema_extra": {
             "example": {
-                "restaurant_id": "MZDP",
-                "user_id": "user007",
                 "diner_count": 6,
                 "total_budget": 600,
-                "dietary_restrictions": [],
-                "ignore_cache": True
+                "ignore_cache": True,
+                "dishes": [
+                    {
+                        "restaurant_id": "MZDP",
+                        "dish_id": "D001",
+                        "dish_name": "夫妻肺片",
+                        "dish_category": "凉菜",
+                        "is_signature": True,
+                        "unit": "份",
+                        "price": 32,
+                        "cooking_methods": ["拌"],
+                        "flavor_tags": ["辣", "麻"],
+                        "is_vegetarian": False,
+                        "is_halal": True,
+                        "main_ingredient": ["牛肉"]
+                    },
+                    {
+                        "restaurant_id": "MZDP",
+                        "dish_id": "D045",
+                        "dish_name": "宫保鸡丁",
+                        "dish_category": "热菜",
+                        "is_signature": False,
+                        "unit": "份",
+                        "price": 42,
+                        "cooking_methods": ["炒"],
+                        "flavor_tags": ["辣", "甜", "酸"],
+                        "is_vegetarian": False,
+                        "is_halal": True,
+                        "main_ingredient": ["禽肉"]
+                    }
+                ]
             }
         }
     }
+
 
 class SimplifiedDish(BaseModel):
     """
@@ -64,7 +90,7 @@ class SimplifiedDish(BaseModel):
 
     class Config:
         populate_by_name = True
-        
+
 
 class MenuResponse(BaseModel):
     """

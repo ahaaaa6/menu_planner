@@ -18,14 +18,12 @@ services:
       APP_REDIS_MENU_CACHE_TTL_SECONDS: "36000"
       APP_REDIS_PLAN_CACHE_TTL_SECONDS: "36000"
       APP_REDIS_PORT: "6379"
-      MOCK_DISH_API_URL: http://mock-api:8001
       PYTHONPATH: /app
       PYTHONUNBUFFERED: "1"
     networks:
       - menu-network
     depends_on:
       - redis
-      - mock-api
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
       timeout: 10s
@@ -53,45 +51,10 @@ services:
           cpus: '0.5'
           memory: 512M
       restart_policy:
-        condition: on-failure  # 只在失败时重启
-        delay: 10s            # 增加延迟时间
-        max_attempts: 5       # 限制重试次数
-        window: 300s          # 5分钟窗口期
-
-  mock-api:
-    image: erikhowe/mock-api:1.7
-    command:
-      - uvicorn
-      - menu_planner.mock_dish_api:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8001"
-    environment:
-      PYTHONPATH: /app
-      PYTHONUNBUFFERED: "1"
-    networks:
-      - menu-network
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001').getcode()"]
-      timeout: 10s
-      interval: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      replicas: 1
-      resources:
-        limits:
-          cpus: '0.5'        # 增加CPU限制
-          memory: 512M       # 增加内存限制
-        reservations:
-          cpus: '0.1'
-          memory: 128M
-      restart_policy:
         condition: on-failure
         delay: 10s
-        max_attempts: 3
-        window: 180s         # 3分钟窗口期
+        max_attempts: 5
+        window: 300s
 
   redis:
     image: redis:alpine
@@ -116,7 +79,7 @@ services:
         condition: on-failure
         delay: 5s
         max_attempts: 3
-        window: 120s         # 2分钟窗口期
+        window: 120s
 
 networks:
   menu-network:
