@@ -27,6 +27,19 @@ class Dish(BaseModel):
     class Config:
         populate_by_name = True
 
+class DishInRequest(BaseModel):
+    """定义请求中单个菜品的数据结构，不包含餐厅ID"""
+    dish_id: str
+    dish_name: str
+    dish_category: str
+    is_signature: bool
+    unit: str
+    price: float
+    cooking_methods: List[str]
+    flavor_tags: List[str]
+    is_vegetarian: bool
+    is_halal: bool
+    main_ingredient: List[str]
 
 class MenuRequest(BaseModel):
     """
@@ -35,7 +48,7 @@ class MenuRequest(BaseModel):
     """
     diner_count: int = Field(..., gt=0, description="就餐人数")
     total_budget: float = Field(..., gt=0, description="总预算")
-    dishes: List[Dish] = Field(..., description="用于配餐的所有可用菜品列表")
+    dishes: List[DishInRequest] = Field(..., description="用于配餐的所有可用菜品列表")
     ignore_cache: bool = Field(False, description="是否忽略方案缓存，强制重新计算")
 
     model_config = {
@@ -46,7 +59,6 @@ class MenuRequest(BaseModel):
                 "ignore_cache": True,
                 "dishes": [
                     {
-                        "restaurant_id": "MZDP",
                         "dish_id": "D001",
                         "dish_name": "夫妻肺片",
                         "dish_category": "凉菜",
@@ -58,20 +70,6 @@ class MenuRequest(BaseModel):
                         "is_vegetarian": False,
                         "is_halal": True,
                         "main_ingredient": ["牛肉"]
-                    },
-                    {
-                        "restaurant_id": "MZDP",
-                        "dish_id": "D045",
-                        "dish_name": "宫保鸡丁",
-                        "dish_category": "热菜",
-                        "is_signature": False,
-                        "unit": "份",
-                        "price": 42,
-                        "cooking_methods": ["炒"],
-                        "flavor_tags": ["辣", "甜", "酸"],
-                        "is_vegetarian": False,
-                        "is_halal": True,
-                        "main_ingredient": ["禽肉"]
                     }
                 ]
             }
@@ -101,7 +99,6 @@ class MenuResponse(BaseModel):
     菜品总数: int
     菜品列表: List[SimplifiedDish]
 
-# --- 新增: 用于异步流程的新模型 ---
 
 class PlanTaskSubmitResponse(BaseModel):
     """

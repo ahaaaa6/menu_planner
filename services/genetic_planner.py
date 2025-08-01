@@ -353,10 +353,10 @@ def _run_ga_blocking(dishes: List[Dish], request: MenuRequest, config: AppConfig
 
     population = toolbox.population(n=config.ga.population_size)
     
-    # 关键改动：使用自定义的差异性名人堂，只保留2个最优且差异明显的解
-    hall_of_fame = DiversityHallOfFame(maxsize=2, dishes=dishes, min_difference_threshold=0.3)
+    # 使用自定义的差异性名人堂，只保留2个最优且差异明显的解
+    hall_of_fame = DiversityHallOfFame(maxsize=2, dishes=dishes, min_difference_threshold=0.5)
 
-    print(f"开始为餐厅 {request.restaurant_id} 执行遗传算法...")
+    print(f"开始为 {request.diner_count} 人就餐执行遗传算法...")
 
     stats = tools.Statistics(lambda ind: ind.fitness.values[0])
     stats.register("avg", lambda x: round(sum(x) / len(x), 2))

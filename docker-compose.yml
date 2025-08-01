@@ -1,8 +1,11 @@
 version: '3.9'
 
 services:
+  #-----------------------------------------
+  # FastAPI 应用服务
+  #-----------------------------------------
   menu-planner-app:
-    image: erikhowe/menu-planner-app:1.7
+    image: erikhowe/menu-planner-app:1.8
     command:
       - uvicorn
       - menu_planner.main:app
@@ -13,39 +16,18 @@ services:
     ports:
       - "8000:8000"
     environment:
-      APP_REDIS_DB: "0"
-      APP_REDIS_HOST: redis
-      APP_REDIS_MENU_CACHE_TTL_SECONDS: "36000"
-      APP_REDIS_PLAN_CACHE_TTL_SECONDS: "36000"
-      APP_REDIS_PORT: "6379"
-      PYTHONPATH: /app
-      PYTHONUNBUFFERED: "1"
-    networks:
-      - menu-network
-    depends_on:
-      - redis
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').getcode()"]
-      timeout: 10s
-      interval: 30s
-      retries: 3
-      start_period: 60s
+      - APP_REDIS_DB=0
+      - APP_REDIS_HOST=redis
+      - APP_REDIS_MENU_CACHE_TTL_SECONDS=36000
+      - APP_REDIS_PLAN_CACHE_TTL_SECONDS=36000
+      - APP_REDIS_PORT=6379
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
     deploy:
-      replicas: 2
-      update_config:
-        parallelism: 1
-        delay: 10s
-        failure_action: rollback
-        monitor: 60s
-        order: start-first
-      rollback_config:
-        parallelism: 1
-        delay: 10s
-        failure_action: pause
-        monitor: 60s
+      replicas: 6
       resources:
         limits:
-          cpus: '4'
+          cpus: '1'
           memory: 4G
         reservations:
           cpus: '0.5'
@@ -55,33 +37,54 @@ services:
         delay: 10s
         max_attempts: 5
         window: 300s
-
-  redis:
-    image: redis:alpine
+    healthcheck:
+      # 健康检查
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 60s
     networks:
       - menu-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      timeout: 5s
-      interval: 10s
-      retries: 3
-      start_period: 30s
+    depends_on:
+      - redis
+
+  #-----------------------------------------
+  # Redis 缓存服务
+  #-----------------------------------------
+  redis:
+    image: redis:alpine
     deploy:
       replicas: 1
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '1'
+          memory: 2G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M 
       restart_policy:
         condition: on-failure
         delay: 5s
         max_attempts: 3
         window: 120s
 
+    # 数据持久化
+    volumes:
+      - ./redis-data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - menu-network
+
+#-----------------------------------------
+# 网络定义
+#-----------------------------------------
 networks:
   menu-network:
-    driver: overlay
-    attachable: true
+    driver: bridge

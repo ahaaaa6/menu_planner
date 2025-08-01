@@ -1,4 +1,4 @@
-# menu_planner/main.py
+# menu_planner/main.py 
 import logging
 import json
 import uuid
@@ -132,18 +132,19 @@ async def run_planning_task(request: MenuRequest, task_id: str):
     plan_cache_key = create_plan_cache_key(request)
 
     try:
-        # 1. 直接从请求中获取菜品并进行预处理
+        # 1. 直接从请求的 dishes 字段中获取菜品列表
         all_dishes = request.dishes
         if not all_dishes:
             raise ValueError("请求中必须提供菜品列表。")
 
+        # 2. 预处理菜品
         available_dishes, error_msg = preprocess_menu(all_dishes, request)
         if error_msg:
             raise ValueError(error_msg)
         
         logger.info(f"Task {task_id}: 筛选后可用菜品数量: {len(available_dishes)}")
 
-        # 2. 调用遗传算法
+        # 3. 调用遗传算法
         menu_results = await plan_menu_async(
             process_pool=app_state["PROCESS_POOL"],
             dishes=available_dishes,
@@ -154,14 +155,14 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         if not menu_results:
             raise ValueError("抱歉，未能找到合适的菜单方案，请您修改预算或调整菜品列表后再次尝试！")
 
-        # 3. 成功，存储结果
+        # 4. 成功，存储任务结果
         result_data = PlanResultSuccess(
             task_id=task_id,
             status="SUCCESS",
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # 4. 准备方案缓存数据
+        # 5. 准备并存储方案缓存
         cache_data = [res.model_dump() for res in menu_results]
         
         task_saved = await redis_manager.set(task_result_key, result_data, ex=3600)
@@ -176,7 +177,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         else:
             logger.warning(f"Task {task_id}: 任务完成但无法保存到Redis。")
         if cache_saved:
-            logger.info(f"Task {task_id}: 方案缓存已更新，锁已释放。")
+            logger.info(f"Task {task_id}: 方案缓存已更新。")
         else:
             logger.warning(f"Task {task_id}: 无法更新方案缓存。")
 
@@ -189,8 +190,7 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         ).model_dump_json()
         
         await redis_manager.set(task_result_key, error_data, ex=3600)
-        await redis_manager.delete(plan_cache_key)
-        logger.info(f"Task {task_id}: 任务失败，已清理方案缓存锁。Key: {plan_cache_key}")
+
 
 
 # --- 主要API端点 ---
@@ -209,16 +209,9 @@ async def submit_menu_plan(
     if request.ignore_cache:
         logger.info("用户请求忽略缓存。强制创建新任务。")
         task_id = str(uuid.uuid4())
-        task_result_key = f"task_result:{task_id}"
-        processing_data = PlanResultProcessing(task_id=task_id, status="PROCESSING").model_dump_json()
-        try:
-            await redis_manager.set(task_result_key, processing_data, ex=3600)
-            background_tasks.add_task(run_planning_task, request, task_id)
-            result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
-            return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
-        except Exception as e:
-            logger.error(f"无法保存任务状态到Redis: {e}")
-            raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后重试。")
+        background_tasks.add_task(run_planning_task, request, task_id)
+        result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
+        return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
 
     plan_cache_key = create_plan_cache_key(request)
 
@@ -257,8 +250,6 @@ async def submit_menu_plan(
 
         if lock_acquired:
             logger.info(f"成功获取分布式锁。创建新任务: {task_id} for key: {plan_cache_key}")
-            task_result_key = f"task_result:{task_id}"
-            await redis_manager.set(task_result_key, processing_marker, ex=3600)
             background_tasks.add_task(run_planning_task, request, task_id)
             result_url = fastapi_request.url_for('get_menu_plan_result', task_id=task_id)
             return PlanTaskSubmitResponse(task_id=task_id, status="PENDING", result_url=str(result_url))
@@ -300,7 +291,8 @@ async def get_menu_plan_result(task_id: str = Path(..., description="提交任�
         result_json = await redis_manager.get(task_result_key)
         
         if not result_json:
-            raise HTTPException(status_code=404, detail="任务ID不存在或已过期。")
+            # 返回处理中状态，而不是404，给后台任务一些执行时间
+            return PlanResultProcessing(task_id=task_id, status="PROCESSING")
         
         result_data = json.loads(result_json)
         return result_data

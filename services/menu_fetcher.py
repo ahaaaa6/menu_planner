@@ -1,14 +1,23 @@
+# menu_planner/services/menu_fetcher.py (修正版)
+
 import logging
 from typing import List, Tuple
 
-from ..schemas.menu import Dish, MenuRequest
+# 确保导入了 Dish 和 DishInRequest 两个模型
+from ..schemas.menu import Dish, DishInRequest, MenuRequest
 
 logger = logging.getLogger(__name__)
 
-def preprocess_menu(all_dishes: List[Dish], request: MenuRequest) -> Tuple[List[Dish], str]:
+# 函数签名接收 DishInRequest 列表
+def preprocess_menu(all_dishes_in_request: List[DishInRequest], request: MenuRequest) -> Tuple[List[Dish], str]:
     """对已加载的菜品列表进行业务逻辑过滤和处理。"""
-    if not all_dishes:
+    if not all_dishes_in_request:
         return [], "菜品列表为空，无法进行配餐。"
+
+    # 在转换时，为 restaurant_id 赋一个默认值，因为它在后续逻辑中不被使用
+    all_dishes: List[Dish] = [
+        Dish(restaurant_id="N/A", **dish.model_dump()) for dish in all_dishes_in_request
+    ]
 
     filtered_dishes = []
     for dish in all_dishes:
@@ -18,12 +27,13 @@ def preprocess_menu(all_dishes: List[Dish], request: MenuRequest) -> Tuple[List[
 
         # 排除主食和甜品，但保留汤品用于后续处理
         if dish.dish_category in ["主食", "甜品"]:
+            logger.info(f"过滤掉菜品 '{dish.dish_name}'，因为其类别是 '{dish.dish_category}'。")
             continue
         
         filtered_dishes.append(dish)
 
     if not filtered_dishes:
-        return [], "抱歉，根据您的忌口信息，没有可选择的菜品。"
+        return [], "抱歉，根据您的忌口或菜品类别过滤后，没有可选择的菜品。"
 
     # 在过滤后的列表上，为所有菜品设置运行时属性
     for dish in filtered_dishes:
