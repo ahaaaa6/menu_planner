@@ -1,12 +1,12 @@
-# menu_planner/schemas/menu.py
+# menu_planner/schemas/menu.py (已更新預設請求範例)
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union, Literal
 
 class Dish(BaseModel):
     """
-    定义单个菜品的数据结构。
-    这个模型应该与API返回的JSON对象中的字段相匹配。
+    定義單個菜品的資料結構。
+    這個模型應該與API返回的JSON對象中的欄位元相匹配。
     """
     restaurant_id: str
     dish_id: str
@@ -28,7 +28,7 @@ class Dish(BaseModel):
         populate_by_name = True
 
 class DishInRequest(BaseModel):
-    """定义请求中单个菜品的数据结构，不包含餐厅ID"""
+    """定義請求中單個菜品的資料結構，不包含餐廳ID"""
     dish_id: str
     dish_name: str
     dish_category: str
@@ -43,33 +43,71 @@ class DishInRequest(BaseModel):
 
 class MenuRequest(BaseModel):
     """
-    定义了客户端发起排菜请求时的JSON结构。
-    FastAPI会用它来校验入参。
+    定義了用戶端發起排菜請求時的JSON結構。
+    FastAPI會用它來校驗入參。
     """
-    diner_count: int = Field(..., gt=0, description="就餐人数")
-    total_budget: float = Field(..., gt=0, description="总预算")
-    dishes: List[DishInRequest] = Field(..., description="用于配餐的所有可用菜品列表")
-    ignore_cache: bool = Field(False, description="是否忽略方案缓存，强制重新计算")
+    diner_count: int = Field(..., gt=0, description="就餐人數")
+    total_budget: float = Field(..., gt=0, description="總預算")
+    dishes: List[DishInRequest] = Field(..., description="用於配餐的所有可用菜品列表")
+    ignore_cache: bool = Field(False, description="是否忽略方案緩存，強制重新計算")
 
     model_config = {
         "json_schema_extra": {
+            # 【核心修改】用 menu.csv 中的菜品更新了整個範例
             "example": {
-                "diner_count": 6,
-                "total_budget": 600,
+                "diner_count": 4,
+                "total_budget": 200,
                 "ignore_cache": True,
                 "dishes": [
                     {
-                        "dish_id": "D001",
-                        "dish_name": "夫妻肺片",
-                        "dish_category": "凉菜",
-                        "is_signature": True,
-                        "unit": "份",
-                        "price": 32,
-                        "cooking_methods": ["拌"],
-                        "flavor_tags": ["辣", "麻"],
-                        "is_vegetarian": False,
-                        "is_halal": True,
-                        "main_ingredient": ["牛肉"]
+                        "dish_id": "D001", "dish_name": "夫妻肺片", "dish_category": "凉菜", "is_signature": True,
+                        "unit": "份", "price": 32, "cooking_methods": ["拌"], "flavor_tags": ["辣", "麻"],
+                        "is_vegetarian": False, "is_halal": True, "main_ingredient": ["牛肉"]
+                    },
+                    {
+                        "dish_id": "D003", "dish_name": "凉拌木耳", "dish_category": "凉菜", "is_signature": False,
+                        "unit": "份", "price": 26, "cooking_methods": ["拌"], "flavor_tags": ["酸", "辣"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["蔬菜"]
+                    },
+                    {
+                        "dish_id": "D045", "dish_name": "宫保鸡丁", "dish_category": "热菜", "is_signature": False,
+                        "unit": "份", "price": 42, "cooking_methods": ["炒"], "flavor_tags": ["辣", "甜", "酸"],
+                        "is_vegetarian": False, "is_halal": True, "main_ingredient": ["禽肉"]
+                    },
+                    {
+                        "dish_id": "D046", "dish_name": "麻婆豆腐", "dish_category": "热菜", "is_signature": True,
+                        "unit": "份", "price": 28, "cooking_methods": ["烧"], "flavor_tags": ["辣", "鲜"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["牛肉"]
+                    },
+                    {
+                        "dish_id": "D053", "dish_name": "水煮鱼", "dish_category": "热菜", "is_signature": False,
+                        "unit": "份", "price": 78, "cooking_methods": ["煮"], "flavor_tags": ["辣", "麻"],
+                        "is_vegetarian": False, "is_halal": True, "main_ingredient": ["水产"]
+                    },
+                    {
+                        "dish_id": "D052", "dish_name": "干煸四季豆", "dish_category": "热菜", "is_signature": False,
+                        "unit": "份", "price": 32, "cooking_methods": ["煸"], "flavor_tags": ["辣", "鲜"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["蔬菜"]
+                    },
+                    {
+                        "dish_id": "D065", "dish_name": "荷塘月色", "dish_category": "热菜", "is_signature": False,
+                        "unit": "份", "price": 32, "cooking_methods": ["炒"], "flavor_tags": ["清淡", "鲜"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["蔬菜"]
+                    },
+                    {
+                        "dish_id": "D153", "dish_name": "番茄鸡蛋汤", "dish_category": "汤品", "is_signature": False,
+                        "unit": "份", "price": 18, "cooking_methods": ["煮"], "flavor_tags": ["鲜"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["蛋类"]
+                    },
+                    {
+                        "dish_id": "D118", "dish_name": "鸡丝凉面", "dish_category": "主食", "is_signature": False,
+                        "unit": "份", "price": 28, "cooking_methods": ["拌"], "flavor_tags": ["辣", "酸"],
+                        "is_vegetarian": False, "is_halal": True, "main_ingredient": ["禽肉"]
+                    },
+                    {
+                        "dish_id": "D127", "dish_name": "红糖糍粑", "dish_category": "主食", "is_signature": False,
+                        "unit": "份", "price": 22, "cooking_methods": ["炸"], "flavor_tags": ["甜"],
+                        "is_vegetarian": True, "is_halal": True, "main_ingredient": ["其他"]
                     }
                 ]
             }
@@ -79,12 +117,12 @@ class MenuRequest(BaseModel):
 
 class SimplifiedDish(BaseModel):
     """
-    定义了在最终响应中，单个菜品的简化输出格式。
+    定義了在最終響應中，單個菜品的簡化輸出格式。
     """
-    编号: str = Field(..., alias='dish_id')
-    菜品名称: str = Field(..., alias='dish_name')
-    单价: float = Field(..., alias='final_price')
-    数量: int = Field(..., alias='contribution_to_dish_count')
+    編號: str = Field(..., alias='dish_id')
+    菜品名稱: str = Field(..., alias='dish_name')
+    單價: float = Field(..., alias='final_price')
+    數量: int = Field(..., alias='contribution_to_dish_count')
 
     class Config:
         populate_by_name = True
@@ -92,32 +130,32 @@ class SimplifiedDish(BaseModel):
 
 class MenuResponse(BaseModel):
     """
-    定义了最终返回给客户端的整个菜单方案的完整格式。
+    定義了最終返回給用戶端的整個菜單方案的完整格式。
     """
-    菜单评分: float
-    总价: float
-    菜品总数: int
-    菜品列表: List[SimplifiedDish]
+    菜單評分: float
+    總價: float
+    菜品總數: int
+    菜品清單: List[SimplifiedDish]
 
 
 class PlanTaskSubmitResponse(BaseModel):
     """
-    提交排菜任务后，立即返回的响应。
+    提交排菜任務後，立即返回的響應。
     """
-    task_id: str = Field(..., description="唯一的任务ID")
-    status: Literal["PENDING"] = Field("PENDING", description="任务状态")
-    result_url: str = Field(..., description="用于查询最终结果的URL")
+    task_id: str = Field(..., description="唯一的任務ID")
+    status: Literal["PENDING"] = Field("PENDING", description="任務狀態")
+    result_url: str = Field(..., description="用於查詢最終結果的URL")
 
 class PlanResultProcessing(BaseModel):
     """
-    当任务还在处理中时，结果查询接口返回的响应。
+    當任務還在處理中時，結果查詢介面返回的響應。
     """
     task_id: str
     status: Literal["PROCESSING"]
 
 class PlanResultSuccess(BaseModel):
     """
-    当任务成功完成时，结果查询接口返回的响应。
+    當任務成功完成時，結果查詢介面返回的響應。
     """
     task_id: str
     status: Literal["SUCCESS"]
@@ -125,17 +163,17 @@ class PlanResultSuccess(BaseModel):
 
 class PlanResultError(BaseModel):
     """
-    当任务处理失败时，结果查询接口返回的响应。
+    當任務處理失敗時，結果查詢介面返回的響應。
     """
     task_id: str
     status: Literal["FAILED"]
     error: str
 
-# 使用联合类型，让FastAPI能够根据内容自动选择正确的模型
+# 使用聯合類型，讓FastAPI能夠根據內容自動選擇正確的模型
 PlanResultResponse = Union[PlanResultSuccess, PlanResultProcessing, PlanResultError]
 
 class MenuPlanCachedResponse(BaseModel):
     """
-    当方案缓存命中时，直接返回的包含多个菜单方案的响应体。
+    當方案緩存命中時，直接返回的包含多個菜單方案的響應體。
     """
-    plans: List[MenuResponse] = Field(..., description="缓存中存储的推荐菜单方案列表")
+    plans: List[MenuResponse] = Field(..., description="緩存中儲存的推薦菜單方案列表")
