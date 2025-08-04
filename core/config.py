@@ -13,7 +13,9 @@ class GAConfig(BaseSettings):
     mutation_rate: float = Field(float(os.getenv("APP_GA_MUTATION_RATE", 0.2)), description="变异概率")
     hall_of_fame_size: int = Field(int(os.getenv("APP_GA_HALL_OF_FAME_SIZE", 3)), description="名人堂大小，即返回的最优解数量")
     dish_count_add_on: int = Field(int(os.getenv("APP_GA_DISH_COUNT_ADD_ON", 2)), description="推荐菜品数 = 人数 + N")
-    
+    min_dishes_for_ga: int = Field(5, description="运行遗传算法所需的最少菜品数量")
+    hof_min_difference_threshold: float = Field(0.5, description="名人堂方案的最低差异度阈值")
+
     # 各种评分项的权重
     weight_price: float = Field(float(os.getenv("APP_GA_WEIGHT_PRICE", 0.4)), description="价格权重")
     weight_dish_count: float = Field(float(os.getenv("APP_GA_WEIGHT_DISH_COUNT", 0.2)), description="菜品数量权重")
