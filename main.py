@@ -202,7 +202,7 @@ async def submit_menu_plan(
     fastapi_request: FastAPIRequest = None
 ):
     """
-    提交配餐任务（异步模式）- 并发安全版
+    提交配餐任务（异步模式）
     """
     logger.info(f"收到配餐请求: 人数={request.diner_count}, 预算={request.total_budget}, 菜品数量={len(request.dishes)}")
 
