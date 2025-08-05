@@ -1,6 +1,5 @@
 import asyncio
 import random
-import logging
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 from typing import List, Dict, Any, Tuple
@@ -10,59 +9,51 @@ from deap import base, creator, tools, algorithms
 from ..core.config import AppConfig
 from ..schemas.menu import Dish, MenuRequest, MenuResponse, SimplifiedDish
 
-# --- 日志和自定义异常 ---
-logger = logging.getLogger(__name__)
+# DEAP 初始化
+creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+creator.create("Individual", list, fitness=creator.FitnessMax)
 
-class MenuPlanningError(Exception):
-    """用于排菜算法特定错误的自定义异常类，方便传递友好的错误信息。"""
-    pass
-
-# --- DEAP 初始化 ---
-# 检查 creator 是否已定义，防止在热重载等场景下重复定义引发错误
-if not hasattr(creator, "FitnessMax"):
-    creator.create("FitnessMax", base.Fitness, weights=(1.0,))
-if not hasattr(creator, "Individual"):
-    creator.create("Individual", list, fitness=creator.FitnessMax)
-
-
-# --- 核心辅助函数 ---
+def _get_dish_attributes(dishes: List[Dish]) -> Dict[str, Any]:
+    """预计算菜品属性，用于遗传算法。"""
+    return {
+        "prices": [dish.price for dish in dishes],
+        "ids": [dish.dish_id for dish in dishes],
+    }
 
 def _calculate_menu_difference(menu1: List[int], menu2: List[int], dishes: List[Dish]) -> float:
-    """计算两个菜单之间的差异度 (保留您的原始加权逻辑)"""
+    """计算两个菜单之间的差异度"""
     selected_dishes_1 = [dishes[i] for i, bit in enumerate(menu1) if bit == 1]
     selected_dishes_2 = [dishes[i] for i, bit in enumerate(menu2) if bit == 1]
     
-    # 【防御性措施】如果任一菜单为空，直接返回0差异度
     if not selected_dishes_1 or not selected_dishes_2:
         return 0.0
     
+    # 1. 菜品差异 - 不同菜品的比例
     dishes_1 = set(d.dish_id for d in selected_dishes_1)
     dishes_2 = set(d.dish_id for d in selected_dishes_2)
-    # 【防御性措施】确保并集不为0，防止除零错误
-    dish_union_len = len(dishes_1.union(dishes_2))
-    dish_difference = len(dishes_1.symmetric_difference(dishes_2)) / dish_union_len if dish_union_len > 0 else 0
+    dish_difference = len(dishes_1.symmetric_difference(dishes_2)) / len(dishes_1.union(dishes_2))
     
+    # 2. 烹饪方法差异
     cooking_methods_1 = set(method for d in selected_dishes_1 for method in d.cooking_methods)
     cooking_methods_2 = set(method for d in selected_dishes_2 for method in d.cooking_methods)
-    cooking_union_len = len(cooking_methods_1.union(cooking_methods_2))
-    cooking_difference = len(cooking_methods_1.symmetric_difference(cooking_methods_2)) / cooking_union_len if cooking_union_len > 0 else 0
+    cooking_difference = len(cooking_methods_1.symmetric_difference(cooking_methods_2)) / max(len(cooking_methods_1.union(cooking_methods_2)), 1)
     
+    # 3. 口味标签差异
     flavors_1 = set(flavor for d in selected_dishes_1 for flavor in d.flavor_tags)
     flavors_2 = set(flavor for d in selected_dishes_2 for flavor in d.flavor_tags)
-    flavor_union_len = len(flavors_1.union(flavors_2))
-    flavor_difference = len(flavors_1.symmetric_difference(flavors_2)) / flavor_union_len if flavor_union_len > 0 else 0
+    flavor_difference = len(flavors_1.symmetric_difference(flavors_2)) / max(len(flavors_1.union(flavors_2)), 1)
     
+    # 4. 主要食材差异
     ingredients_1 = set(ing for d in selected_dishes_1 for ing in d.main_ingredient)
     ingredients_2 = set(ing for d in selected_dishes_2 for ing in d.main_ingredient)
-    ingredient_union_len = len(ingredients_1.union(ingredients_2))
-    ingredient_difference = len(ingredients_1.symmetric_difference(ingredients_2)) / ingredient_union_len if ingredient_union_len > 0 else 0
+    ingredient_difference = len(ingredients_1.symmetric_difference(ingredients_2)) / max(len(ingredients_1.union(ingredients_2)), 1)
     
+    # 5. 价格差异（标准化）
     price_1 = sum(d.price for d in selected_dishes_1)
     price_2 = sum(d.price for d in selected_dishes_2)
-    price_sum = price_1 + price_2
-    price_difference = abs(price_1 - price_2) / price_sum if price_sum > 0 else 0
+    price_difference = abs(price_1 - price_2) / max(price_1 + price_2, 1)
     
-    # 加权平均逻辑
+    # 综合差异度（加权平均）
     total_difference = (
         dish_difference * 0.4 +
         cooking_difference * 0.2 +
@@ -74,7 +65,10 @@ def _calculate_menu_difference(menu1: List[int], menu2: List[int], dishes: List[
     return total_difference
 
 class DiversityHallOfFame:
-    """自定义名人堂类 (增强 insert 方法的健壮性)"""
+    """
+    自定义名人堂类，内置差异性考虑
+    确保存储的解决方案不仅质量高，而且彼此之间差异明显
+    """
     def __init__(self, maxsize: int, dishes: List[Dish], min_difference_threshold: float = 0.3):
         self.maxsize = maxsize
         self.dishes = dishes
@@ -83,35 +77,43 @@ class DiversityHallOfFame:
     
     def insert(self, item):
         """插入新的个体，考虑适应度和差异性"""
-        # 【防御性措施】确保个体有有效的适应度值
-        if not hasattr(item, 'fitness') or not item.fitness.valid:
-            return
-
-        is_different_enough = self._is_sufficiently_different(item)
-        
-        if not is_different_enough:
-            return
-
+        # 如果名人堂未满，检查是否与现有解决方案有足够差异
         if len(self.items) < self.maxsize:
-            self.items.append(item)
-            self.items.sort(key=lambda x: x.fitness.values[0], reverse=True)
-        else:
-            # 找到名人堂中适应度最差的个体
-            worst_item = min(self.items, key=lambda x: x.fitness.values[0])
-            # 如果新个体的适应度更高，则替换掉最差的
-            if item.fitness.values[0] > worst_item.fitness.values[0]:
-                self.items.remove(worst_item)
+            if self._is_sufficiently_different(item):
                 self.items.append(item)
                 self.items.sort(key=lambda x: x.fitness.values[0], reverse=True)
+                return True
+            elif len(self.items) == 0:  # 第一个解决方案总是被接受
+                self.items.append(item)
+                return True
+        else:
+            # 名人堂已满，检查新解决方案是否值得替换现有解决方案
+            worst_fitness = min(ind.fitness.values[0] for ind in self.items)
+            
+            # 如果新解决方案的适应度比最差的好，且与其他解决方案有足够差异
+            if (item.fitness.values[0] > worst_fitness and 
+                self._is_sufficiently_different(item)):
+                
+                # 移除适应度最低的解决方案
+                worst_idx = min(range(len(self.items)), 
+                              key=lambda i: self.items[i].fitness.values[0])
+                self.items.pop(worst_idx)
+                self.items.append(item)
+                self.items.sort(key=lambda x: x.fitness.values[0], reverse=True)
+                return True
+        
+        return False
     
     def _is_sufficiently_different(self, new_item) -> bool:
         """检查新解决方案是否与现有解决方案有足够差异"""
         if not self.items:
             return True
+        
         for existing_item in self.items:
             difference = _calculate_menu_difference(new_item, existing_item, self.dishes)
             if difference < self.min_difference_threshold:
                 return False
+        
         return True
     
     def __len__(self):
@@ -122,14 +124,6 @@ class DiversityHallOfFame:
     
     def __getitem__(self, index):
         return self.items[index]
-
-
-def _get_dish_attributes(dishes: List[Dish]) -> Dict[str, Any]:
-    """预计算菜品属性，用于遗传算法。"""
-    return {
-        "prices": [dish.price for dish in dishes],
-        "ids": [dish.dish_id for dish in dishes],
-    }
 
 def _repair_individual(individual: List[int], dishes: List[Dish], budget: float) -> List[int]:
     """修复个体，确保不超预算且预算利用率不低于80%，同时保持多样性"""
@@ -318,21 +312,27 @@ def _evaluate_menu(individual: List[int], dishes: List[Dish], request: MenuReque
 
     return (max(0, final_score),)
 
-# --- 遗传算法执行主函数 (增加防御和日志) ---
-
 def _run_ga_blocking(dishes: List[Dish], request: MenuRequest, config: AppConfig) -> DiversityHallOfFame:
-    """在阻塞模式下运行遗传算法 """
-    # 【防御性检查】检查可用菜品数量是否满足最低要求
-    min_dishes_required = config.ga.min_dishes_for_ga # 假设配置中有这个值
-    if len(dishes) < min_dishes_required:
-        raise MenuPlanningError(f"可用菜品数量不足。算法至少需要 {min_dishes_required} 道菜，但目前只有 {len(dishes)} 道可用。")
+    """
+    在阻塞模式下运行遗传算法，使用自定义的差异性名人堂
+    """
+    dish_attributes = _get_dish_attributes(dishes)
+    num_dishes = len(dishes)
 
     toolbox = base.Toolbox()
     
-    toolbox.register("individual", _create_valid_individual, dishes=dishes, request=request, config=config)
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual, n=config.ga.population_size)
+    def create_individual():
+        return creator.Individual(_create_valid_individual(dishes, request, config))
+    
+    toolbox.register("individual", create_individual)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
-    toolbox.register("evaluate", _evaluate_menu, dishes=dishes, request=request, config=config)
+    def evaluate_and_repair(individual):
+        repaired = _repair_individual(individual[:], dishes, request.total_budget)
+        individual[:] = repaired
+        return _evaluate_menu(individual, dishes, request, config)
+    
+    toolbox.register("evaluate", evaluate_and_repair)
     toolbox.register("mate", tools.cxTwoPoint)
     toolbox.register("mutate", tools.mutFlipBit, indpb=config.ga.mutation_rate)
     toolbox.register("select", tools.selTournament, tournsize=3)
@@ -341,120 +341,132 @@ def _run_ga_blocking(dishes: List[Dish], request: MenuRequest, config: AppConfig
         tools.cxTwoPoint(ind1, ind2)
         ind1[:] = _repair_individual(ind1[:], dishes, request.total_budget)
         ind2[:] = _repair_individual(ind2[:], dishes, request.total_budget)
-        del ind1.fitness.values
-        del ind2.fitness.values
         return ind1, ind2
     
     def mutate_and_repair(individual):
         tools.mutFlipBit(individual, indpb=config.ga.mutation_rate)
         individual[:] = _repair_individual(individual[:], dishes, request.total_budget)
-        del individual.fitness.values
         return individual,
     
     toolbox.register("mate", crossover_and_repair)
     toolbox.register("mutate", mutate_and_repair)
 
-    population = toolbox.population()
+    population = toolbox.population(n=config.ga.population_size)
+    
+    # 使用自定义的差异性名人堂，只保留2个最优且差异明显的解
     hall_of_fame = DiversityHallOfFame(maxsize=2, dishes=dishes, min_difference_threshold=0.5)
 
+    print(f"开始为 {request.diner_count} 人就餐执行遗传算法...")
+
     stats = tools.Statistics(lambda ind: ind.fitness.values[0])
-    stats.register("avg", np.mean)
-    stats.register("max", np.max)
+    stats.register("avg", lambda x: round(sum(x) / len(x), 2))
+    stats.register("max", lambda x: round(max(x), 2))
 
-    logger.info(f"开始为 {request.diner_count} 人就餐执行遗传算法 (共 {config.ga.generations} 代)...")
-
-    # 自定义进化循环
+    # 自定义进化过程，在每一代中更新差异性名人堂
     for generation in range(config.ga.generations):
+        # 选择下一代
         offspring = toolbox.select(population, len(population))
         offspring = list(map(toolbox.clone, offspring))
         
+        # 交叉
         for child1, child2 in zip(offspring[::2], offspring[1::2]):
             if random.random() < config.ga.crossover_rate:
                 toolbox.mate(child1, child2)
+                del child1.fitness.values
+                del child2.fitness.values
         
+        # 变异
         for mutant in offspring:
             if random.random() < config.ga.mutation_rate:
                 toolbox.mutate(mutant)
+                del mutant.fitness.values
         
+        # 评估未评估的个体
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = map(toolbox.evaluate, invalid_ind)
+        fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
         for ind, fit in zip(invalid_ind, fitnesses):
             ind.fitness.values = fit
         
+        # 更新差异性名人堂
         for ind in offspring:
-            hall_of_fame.insert(ind)
+            if ind.fitness.values[0] > 0:  # 只考虑有效的解决方案
+                hall_of_fame.insert(ind)
         
         population[:] = offspring
         
-        if (generation + 1) % 10 == 0:
+        # 记录统计信息
+        if generation % 10 == 0:
             record = stats.compile(population)
-            logger.info(f"第 {generation + 1} 代: 平均适应度 {record['avg']:.2f}, 最大适应度 {record['max']:.2f}, 名人堂大小 {len(hall_of_fame)}")
+            print(f"第 {generation} 代: 平均适应度 {record['avg']}, 最大适应度 {record['max']}, 名人堂大小 {len(hall_of_fame)}")
 
-    # 【防御性检查】检查名人堂是否有结果
-    if not hall_of_fame:
-        raise MenuPlanningError("算法执行完毕，但未能找到任何满足条件的菜单方案。请尝试放宽预算或增加菜品选择。")
-
-    logger.info(f"遗传算法执行完毕。在名人堂中找到 {len(hall_of_fame)} 个最优解。")
+    print(f"遗传算法执行完毕。差异性名人堂中有 {len(hall_of_fame)} 个最优解。")
+    
+    # 显示最终结果的差异度
     if len(hall_of_fame) == 2:
         difference = _calculate_menu_difference(hall_of_fame[0], hall_of_fame[1], dishes)
-        logger.info(f"两个最优解的差异度: {difference:.2%}")
+        print(f"两个解决方案的差异度: {difference:.2%}")
     
     return hall_of_fame
 
-# --- 异步接口 (增加错误捕获和日志) ---
 async def plan_menu_async(
     process_pool: ProcessPoolExecutor,
     dishes: List[Dish],
     request: MenuRequest,
     config: AppConfig,
 ) -> List[MenuResponse]:
-    """异步接口，用于在背景进程中执行计算密集型的遗传算法。"""
-    loop = asyncio.get_running_loop()
+    """
+    异步接口，用于规划菜单。
+    现在直接返回差异性名人堂中的解决方案，无需事后筛选。
+    """
+    loop = asyncio.get_event_loop()
     
-    try:
-        hall_of_fame = await loop.run_in_executor(
-            process_pool,
-            _run_ga_blocking,
-            dishes,
-            request,
-            config
-        )
+    hall_of_fame = await loop.run_in_executor(
+        process_pool,
+        _run_ga_blocking,
+        dishes,
+        request,
+        config
+    )
 
-        menu_responses: List[MenuResponse] = []
-        for individual in hall_of_fame:
-            selected_dishes = [dishes[i] for i, selected in enumerate(individual) if selected]
-            if not selected_dishes:
-                continue
+    if not hall_of_fame:
+        print("警告：没有找到符合要求的菜单方案")
+        return []
 
-            score = round(individual.fitness.values[0], 2)
-            total_price = round(sum(dish.price for dish in selected_dishes), 2)
+    menu_responses: List[MenuResponse] = []
 
-            simplified_dishes = [
-                SimplifiedDish(
-                    dish_id=dish.dish_id,
-                    dish_name=dish.dish_name,
-                    final_price=dish.price,
-                    contribution_to_dish_count=1
-                ) for dish in selected_dishes
-            ]
-            response = MenuResponse(
-                菜单评分=score,
-                总价=total_price,
-                菜品总数=len(selected_dishes),
-                菜品列表=simplified_dishes,
+    # 直接使用差异性名人堂中的解决方案
+    for individual in hall_of_fame:
+        selected_dishes = [dishes[i] for i, selected in enumerate(individual) if selected]
+
+        if not selected_dishes:
+            continue
+
+        # 适应度分数，精确到小数点后2位
+        score = round(individual.fitness.values[0], 2)
+        total_price = sum(dish.price for dish in selected_dishes)
+        budget_utilization = round(total_price / request.total_budget * 100, 1) if request.total_budget > 0 else 0
+
+        simplified_dishes = [
+            SimplifiedDish(
+                dish_id=dish.dish_id,
+                dish_name=dish.dish_name,
+                final_price=dish.final_price,  # <--- 修正
+                contribution_to_dish_count=dish.contribution_to_dish_count
             )
-            menu_responses.append(response)
+            for dish in selected_dishes
+        ]
 
-        logger.info(f"成功生成 {len(menu_responses)} 个差异化菜单方案。")
-        return menu_responses
+        response = MenuResponse(
+            菜单评分=score,
+            总价=total_price,
+            菜品总数=len(selected_dishes),
+            菜品清单=simplified_dishes,
+        )
+        menu_responses.append(response)
 
-    except MenuPlanningError as e:
-        # 捕获自定义的业务逻辑错误
-        logger.warning(f"排菜逻辑错误：{e}")
-        # 将错误信息向上抛出，以便返回给前端用户
-        raise e
-    except Exception as e:
-        # 【安全网】捕获所有其他未知错误
-        logger.error("执行遗传算法时发生未知错误。", exc_info=True)
-        # 向上抛出一个统一的、对用户友好的内部错误提示
-        raise MenuPlanningError("执行排菜算法时发生未知的内部错误，请联系技术支援。")
+    print(f"返回 {len(menu_responses)} 个预算利用率≥80%且差异明显的菜单方案")
+    for i, response in enumerate(menu_responses):
+        budget_util = round(response.总价 / request.total_budget * 100, 1) if request.total_budget > 0 else 0
+        print(f"菜单 {i+1}: 预算利用率 {budget_util}%, 评分 {response.菜单评分}")
+
+    return menu_responses
