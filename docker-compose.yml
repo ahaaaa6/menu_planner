@@ -5,7 +5,7 @@ services:
   # FastAPI 应用服务
   #-----------------------------------------
   menu-planner-app:
-    image: erikhowe/menu-planner-app:1.0.2
+    image: erikhowe/menu-planner-app:1.0.5
     command:
       - uvicorn
       - menu_planner.main:app
