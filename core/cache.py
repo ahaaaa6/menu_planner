@@ -188,23 +188,26 @@ class RedisManager:
         )
 
     async def set(
-        self, 
-        key: str, 
-        value: str, 
+        self,
+        key: str,
+        value: str,
         ex: Optional[int] = None,
-        raise_on_failure: bool = False
+        raise_on_failure: bool = False,
+        **kwargs
     ) -> bool:
-        """设置键值，带重试逻辑"""
-        async def _set_operation(client, key, value, ex=None):
-            return await client.set(key, value, ex=ex)
-        
+        """设置键值，带重试逻辑，并支持 nx 等额外参数。"""
+        async def _set_operation(client, key, value, ex=None, **kwargs):
+            # 将 ex 和其他所有关键字参数一起传递给底层的 set 方法
+            return await client.set(key, value, ex=ex, **kwargs)
+
         try:
             result = await self.execute_with_retry(
-                _set_operation, 
-                key, 
-                value, 
+                _set_operation,
+                key,
+                value,
                 ex=ex,
-                fallback_result=False if not raise_on_failure else None
+                fallback_result=False if not raise_on_failure else None,
+                **kwargs
             )
             return result if result is not None else False
         except RedisConnectionError:
