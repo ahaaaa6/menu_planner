@@ -175,10 +175,30 @@ def _repair_individual(individual: List[int], dishes: List[Dish], budget: float)
                     else:
                         break
     
+    selected_indices_after_repair = [i for i, bit in enumerate(individual) if bit == 1]
+    if len(selected_indices_after_repair) % 2 != 0:
+        current_total_price = sum(dishes[i].price for i in selected_indices_after_repair)
+        remaining_budget = budget - current_total_price
+        
+        # 同样，优先尝试添加最便宜的菜品
+        available_to_add = [
+            i for i in range(len(dishes)) 
+            if individual[i] == 0 and dishes[i].price <= remaining_budget
+        ]
+        if available_to_add:
+            available_to_add.sort(key=lambda i: dishes[i].price)
+            individual[available_to_add[0]] = 1
+        else:
+            # 否则，移除已选中的最便宜的菜品
+            if selected_indices_after_repair:
+                selected_indices_after_repair.sort(key=lambda i: dishes[i].price)
+                remove_idx = selected_indices_after_repair[0]
+                individual[remove_idx] = 0
+                
     return individual
 
 def _create_valid_individual(dishes: List[Dish], request: MenuRequest, config: AppConfig) -> List[int]:
-    """创建符合预算约束的个体，平衡预算利用率和多样性"""
+    """创建符合预算约束的个体，平衡预算利用率、多样性，并确保菜品数量为偶数"""
     individual = [0] * len(dishes)
     available_budget = request.total_budget
     min_budget_required = request.total_budget * 0.8
@@ -235,6 +255,29 @@ def _create_valid_individual(dishes: List[Dish], request: MenuRequest, config: A
                 if current_total >= min_budget_required:
                     break
     
+    # 在生成个体后，检查并确保菜品数量为偶数
+    selected_count = sum(individual)
+    if selected_count % 2 != 0:
+        current_total_price = sum(dishes[i].price for i, bit in enumerate(individual) if bit == 1)
+        remaining_budget = request.total_budget - current_total_price
+
+        # 策略：如果为奇数，优先尝试添加一个价格最低的菜品
+        available_to_add = [
+            i for i, bit in enumerate(individual) 
+            if bit == 0 and dishes[i].price <= remaining_budget
+        ]
+        if available_to_add:
+            # 按价格升序排序，选择最便宜的菜品添加
+            available_to_add.sort(key=lambda i: dishes[i].price)
+            individual[available_to_add[0]] = 1
+        else:
+            # 如果预算不足以添加任何菜品，则移除一个已选中的、最便宜的菜品
+            selected_indices = [i for i, bit in enumerate(individual) if bit == 1]
+            if selected_indices:
+                selected_indices.sort(key=lambda i: dishes[i].price)
+                remove_idx = selected_indices[0]
+                individual[remove_idx] = 0
+
     return individual
 
 def _evaluate_menu(individual: List[int], dishes: List[Dish], request: MenuRequest, config: AppConfig) -> Tuple[float]:
