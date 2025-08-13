@@ -25,8 +25,8 @@ def preprocess_menu(all_dishes_in_request: List[DishInRequest], request: MenuReq
         if not dish.price or dish.price <= 0:
             continue
 
-        # 排除主食和甜品，但保留汤品用于后续处理
-        if dish.dish_category in ["主食", "甜品"]:
+        # 排除主食和酒水
+        if dish.dish_category in ["主食", "酒水"]:
             logger.info(f"过滤掉菜品 '{dish.dish_name}'，因为其类别是 '{dish.dish_category}'。")
             continue
         
