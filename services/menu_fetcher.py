@@ -1,23 +1,27 @@
-# menu_planner/services/menu_fetcher.py (修正版)
+# menu_planner/services/menu_fetcher.py
 
 import logging
-from typing import List, Tuple
-
-# 确保导入了 Dish 和 DishInRequest 两个模型
+from typing import List, Tuple, Set
 from ..schemas.menu import Dish, DishInRequest, MenuRequest
 
 logger = logging.getLogger(__name__)
 
-# 函数签名接收 DishInRequest 列表
 def preprocess_menu(all_dishes_in_request: List[DishInRequest], request: MenuRequest) -> Tuple[List[Dish], str]:
     """对已加载的菜品列表进行业务逻辑过滤和处理。"""
     if not all_dishes_in_request:
         return [], "菜品列表为空，无法进行配餐。"
 
-    # 在转换时，为 restaurant_id 赋一个默认值，因为它在后续逻辑中不被使用
-    all_dishes: List[Dish] = [
-        Dish(restaurant_id="N/A", **dish.model_dump()) for dish in all_dishes_in_request
-    ]
+    all_dishes: List[Dish] = [Dish(**dish.model_dump()) for dish in all_dishes_in_request]
+
+    disliked_ingredients: Set[str] = set()
+    disliked_flavors: Set[str] = set()
+    disliked_methods: Set[str] = set()
+
+    # 仅当用户提供了偏好信息时，才提取忌口项
+    if request.preferences:
+        disliked_ingredients = set(request.preferences.main_ingredient.get('dislikes', []))
+        disliked_flavors = set(request.preferences.flavor.get('dislikes', []))
+        disliked_methods = set(request.preferences.cooking_method.get('dislikes', []))
 
     filtered_dishes = []
     for dish in all_dishes:
@@ -27,9 +31,23 @@ def preprocess_menu(all_dishes_in_request: List[DishInRequest], request: MenuReq
 
         # 排除主食和酒水
         if dish.dish_category in ["主食", "酒水"]:
-            logger.info(f"过滤掉菜品 '{dish.dish_name}'，因为其类别是 '{dish.dish_category}'。")
             continue
         
+        # 检查忌口主食材
+        if disliked_ingredients and not disliked_ingredients.isdisjoint(dish.main_ingredient):
+            logger.debug(f"过滤菜品 '{dish.dish_name}' (忌口主食材: {set(dish.main_ingredient).intersection(disliked_ingredients)})")
+            continue
+            
+        # 检查忌口口味
+        if disliked_flavors and not disliked_flavors.isdisjoint(dish.flavor_tags):
+            logger.debug(f"过滤菜品 '{dish.dish_name}' (忌口口味: {set(dish.flavor_tags).intersection(disliked_flavors)})")
+            continue
+
+        # 检查忌口烹饪方式
+        if disliked_methods and not disliked_methods.isdisjoint(dish.cooking_methods):
+            logger.debug(f"过滤菜品 '{dish.dish_name}' (忌口烹饪方式: {set(dish.cooking_methods).intersection(disliked_methods)})")
+            continue
+
         filtered_dishes.append(dish)
 
     if not filtered_dishes:

@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
 from typing import List, Union
 from fastapi import FastAPI, HTTPException, Body, BackgroundTasks, Path, Request as FastAPIRequest
+from starlette.responses import JSONResponse
+
 from .schemas.menu import (
     MenuRequest,
     PlanTaskSubmitResponse,
@@ -18,18 +20,18 @@ from .schemas.menu import (
     PlanResultSuccess,
     PlanResultError,
     PlanResultProcessing,
-    PlanResultResponse
+    PlanResultResponse,
+    Dish
 )
+
 from .services.menu_fetcher import preprocess_menu
 from .services.genetic_planner import plan_menu_async
 from .core.cache import redis_manager, RedisConnectionError
 from .core.config import settings
 
-# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 应用状态存储
 app_state = {}
 
 @asynccontextmanager
@@ -65,8 +67,6 @@ async def lifespan(app: FastAPI):
     await redis_manager.close()
     logger.info("✅ Redis 连接池已关闭")
 
-
-# API 描述文档
 api_description = """
 一个全自动的配餐API服务，能够根据预算、人数和完整的菜品信息，利用遗传算法推荐多样化的菜单组合。
 
@@ -78,7 +78,8 @@ api_description = """
 
 1.  **提交配餐任务**:
     - 使用 `POST /api/v1/plan-menu` 端点提交您的配餐需求。
-    - 请求体中 **必须** 包含 `diner_count` (就餐人数), `total_budget` (总预算), 以及 `dishes` (一个包含所有可用菜品信息的完整列表)。
+    - 请求体中 **必须** 包含 `diner_count` (就餐人数), `total_budget` (总预算), 以及 `dishes` (所有可用菜品信息列表)。
+    - **可选字段**: 你可以添加 `diner_breakdown` (人员分类) 和 `preferences` (偏好) 来获得更定制化的结果。
     - 系统验证请求后，会返回一个 `task_id`，代表您的任务已进入后台处理队列。
 
 2.  **查询配餐结果**:
@@ -92,7 +93,7 @@ api_description = """
 为了避免对**完全相同的请求**进行重复的CPU密集型计算，我们设计了一套方案缓存系统。
 
 -   **工作原理**:
-    - 当您提交任务时，系统会根据您请求的**所有参数**（人数、预算和完整的菜品列表）生成一个唯一的哈希标识。
+    - 当您提交任务时，系统会根据您请求的**所有参数**（人数、预算、人员分类、偏好和完整的菜品列表）生成一个唯一的哈希标识。
     - 系统会用此标识**优先在缓存中查找**是否已有完全匹配的、计算好的菜单方案。
     - **如果命中缓存**，API将**立即返回完整的菜单方案**，整个过程几乎没有延迟，也不会创建新的后台任务。
     - **如果未命中缓存**，系统才会创建新任务，并返回 `task_id` 供您后续查询。
@@ -104,26 +105,54 @@ api_description = """
 > **测试建议**: 在进行性能基准测试或需要确保获得全新结果时，建议将 `ignore_cache` 设置为 `true`。
 """
 
-
 app = FastAPI(
     title="AI配餐模型 API",
     description=api_description,
-    version="1.0.0",
+    version="1.0.0", 
     lifespan=lifespan
 )
 
-# --- 辅助函数，用于创建缓存键 ---
-def create_plan_cache_key(request: MenuRequest) -> str:
-    """为方案请求创建一个确定性的缓存键"""
-    # 对菜品ID进行排序，确保顺序不影响哈希值
-    sorted_dish_ids = sorted([d.dish_id for d in request.dishes])
-    key_string = (
-        f"{request.diner_count}:{request.total_budget}:"
-        f"{','.join(sorted_dish_ids)}"
-    )
-    return f"plan_cache:{hashlib.md5(key_string.encode()).hexdigest()}"
+# 性能熔断中间件 
+@app.middleware("http")
+async def performance_limiter_middleware(request: FastAPIRequest, call_next):
+    # 对计算密集型的排菜接口进行限制
+    if request.url.path == "/api/v1/plan-menu" and request.method == "POST":
+        # 获取当前CPU和内存使用率
+        cpu_percent = psutil.cpu_percent(interval=None)
+        memory_percent = psutil.virtual_memory().percent
 
-# --- 后台任务执行函数 ---
+        # 定义性能阈值 (可以写入 config.py 中)
+        CPU_THRESHOLD = 90.0  # 90% CPU使用率
+        MEMORY_THRESHOLD = 90.0 # 85% 内存使用率
+
+        if cpu_percent > CPU_THRESHOLD or memory_percent > MEMORY_THRESHOLD:
+            logger.warning(
+                f"服务过载，拒绝新请求。CPU: {cpu_percent}%, 内存: {memory_percent}%"
+            )
+            # 返回 503 服务不可用错误
+            return JSONResponse(
+                status_code=503,
+                content={"detail": f"服务当前负载过高，请稍后重试。CPU: {cpu_percent}%, Memory: {memory_percent}%"}
+            )
+    
+    # 如果性能正常，则继续处理请求
+    response = await call_next(request)
+    return response
+
+def create_plan_cache_key(request: MenuRequest) -> str:
+    """为方案请求创建一个确定性的缓存键 (V1.0版)"""
+    request_details = {
+        "budget": request.total_budget,
+        "diner_count": request.diner_count, # 使用总人数
+        # 仅当字段存在时才加入哈希计算
+        "diners": request.diner_breakdown.model_dump() if request.diner_breakdown else None,
+        "prefs": request.preferences.model_dump() if request.preferences else None,
+        "dishes": sorted([d.dish_id for d in request.dishes])
+    }
+    key_string = json.dumps(request_details, sort_keys=True)
+    return f"plan_cache_v2.1:{hashlib.md5(key_string.encode()).hexdigest()}"
+
+# --- 后台任务执行函数 run_planning_task---
 async def run_planning_task(request: MenuRequest, task_id: str):
     """
     后台任务执行函数，带Redis重试逻辑
@@ -132,19 +161,16 @@ async def run_planning_task(request: MenuRequest, task_id: str):
     plan_cache_key = create_plan_cache_key(request)
 
     try:
-        # 1. 直接从请求的 dishes 字段中获取菜品列表
         all_dishes = request.dishes
         if not all_dishes:
             raise ValueError("请求中必须提供菜品列表。")
-
-        # 2. 预处理菜品
+        
         available_dishes, error_msg = preprocess_menu(all_dishes, request)
         if error_msg:
             raise ValueError(error_msg)
         
         logger.info(f"Task {task_id}: 筛选后可用菜品数量: {len(available_dishes)}")
-
-        # 3. 调用遗传算法
+        
         menu_results = await plan_menu_async(
             process_pool=app_state["PROCESS_POOL"],
             dishes=available_dishes,
@@ -155,14 +181,12 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         if not menu_results:
             raise ValueError("抱歉，未能找到合适的菜单方案，请您修改预算或调整菜品列表后再次尝试！")
 
-        # 4. 成功，存储任务结果
         result_data = PlanResultSuccess(
             task_id=task_id,
             status="SUCCESS",
             result=[res.model_dump() for res in menu_results]
         ).model_dump_json()
 
-        # 5. 准备并存储方案缓存
         cache_data = [res.model_dump() for res in menu_results]
         
         task_saved = await redis_manager.set(task_result_key, result_data, ex=3600)
@@ -191,8 +215,6 @@ async def run_planning_task(request: MenuRequest, task_id: str):
         
         await redis_manager.set(task_result_key, error_data, ex=3600)
 
-
-
 # --- 主要API端点 ---
 @app.post("/api/v1/plan-menu", response_model=Union[PlanTaskSubmitResponse, MenuPlanCachedResponse],
     tags=["Menu Planning (Async)"],)
@@ -201,10 +223,17 @@ async def submit_menu_plan(
     background_tasks: BackgroundTasks = BackgroundTasks(),
     fastapi_request: FastAPIRequest = None
 ):
-    """
-    提交配餐任务（异步模式）
-    """
+    """提交配餐任务（异步模式）"""
     logger.info(f"收到配餐请求: 人数={request.diner_count}, 预算={request.total_budget}, 菜品数量={len(request.dishes)}")
+
+    # 仅当 diner_breakdown 被提供时才进行验证
+    if request.diner_breakdown:
+        breakdown = request.diner_breakdown
+        if request.diner_count != (breakdown.male_adults + breakdown.female_adults + breakdown.children):
+            raise HTTPException(
+                status_code=400,
+                detail="总就餐人数与详细分类人数之和不匹配。"
+            )
 
     if request.ignore_cache:
         logger.info("用户请求忽略缓存。强制创建新任务。")
@@ -215,6 +244,7 @@ async def submit_menu_plan(
 
     plan_cache_key = create_plan_cache_key(request)
 
+    # --- 分布式锁和缓存命中逻辑 ---
     try:
         cached_value_json = await redis_manager.get(plan_cache_key)
         if cached_value_json:
@@ -279,7 +309,6 @@ async def submit_menu_plan(
         logger.error(f"创建任务时发生未知错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="服务器内部错误。")
 
-
 @app.get("/api/v1/plan-menu/results/{task_id}", response_model=PlanResultResponse, tags=["Menu Planning (Async)"])
 async def get_menu_plan_result(task_id: str = Path(..., description="提交任务时获取的Task ID")):
     """
@@ -291,7 +320,6 @@ async def get_menu_plan_result(task_id: str = Path(..., description="提交任�
         result_json = await redis_manager.get(task_result_key)
         
         if not result_json:
-            # 返回处理中状态，而不是404，给后台任务一些执行时间
             return PlanResultProcessing(task_id=task_id, status="PROCESSING")
         
         result_data = json.loads(result_json)
@@ -308,7 +336,7 @@ async def health_check():
     redis_ping = await redis_manager.ping()
     return {
         "status": "ok" if redis_ping else "degraded",
-        "message": "欢迎使用AI配餐模型 API v1.0",
+        "message": "欢迎使用AI配餐模型 API v1.0", 
         "redis": {
             "connected": redis_ping,
             "status": redis_status

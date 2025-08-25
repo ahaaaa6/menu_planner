@@ -9,7 +9,7 @@ from deap import base, creator, tools, algorithms
 from ..core.config import AppConfig
 from ..schemas.menu import Dish, MenuRequest, MenuResponse, SimplifiedDish
 
-# DEAP 初始化
+# DEAP 初始化 
 creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMax)
 
@@ -204,19 +204,14 @@ def _create_valid_individual(dishes: List[Dish], request: MenuRequest, config: A
     min_budget_required = request.total_budget * 0.8
     
     selected_count = 0
-    ideal_count = request.diner_count + config.ga.dish_count_add_on
-    max_count = int(ideal_count * 1.5)
     current_total = 0
     
-    # 使用多种策略来创建个体，增加多样性
     strategy = random.choice(['high_price_first', 'balanced', 'random_fill'])
     
     if strategy == 'high_price_first':
-        dish_indices = list(range(len(dishes)))
-        dish_indices.sort(key=lambda i: dishes[i].price, reverse=True)
+        dish_indices = sorted(range(len(dishes)), key=lambda i: dishes[i].price, reverse=True)
     elif strategy == 'balanced':
-        dish_indices = list(range(len(dishes)))
-        dish_indices.sort(key=lambda i: (
+        dish_indices = sorted(range(len(dishes)), key=lambda i: (
             dishes[i].price * 0.6 + 
             len(dishes[i].cooking_methods) * 10 + 
             len(dishes[i].flavor_tags) * 5 + 
@@ -228,30 +223,24 @@ def _create_valid_individual(dishes: List[Dish], request: MenuRequest, config: A
     
     # 第一阶段：按策略选择菜品
     for dish_idx in dish_indices:
-        if (dishes[dish_idx].price <= available_budget and 
-            selected_count < max_count):
+        if (dishes[dish_idx].price <= available_budget):
             individual[dish_idx] = 1
             available_budget -= dishes[dish_idx].price
             current_total += dishes[dish_idx].price
             selected_count += 1
-            
             if current_total >= request.total_budget * 0.95:
                 break
     
-    # 第二阶段：确保达到最低预算要求
+    # 第二阶段：确保达到最低预算要求 (这是唯一需要的版本)
     if current_total < min_budget_required:
         remaining_dishes = [i for i in range(len(dishes)) if individual[i] == 0]
         remaining_dishes.sort(key=lambda i: dishes[i].price, reverse=True)
-        
         for dish_idx in remaining_dishes:
-            if (dishes[dish_idx].price <= available_budget and 
-                selected_count < max_count and
-                current_total + dishes[dish_idx].price <= request.total_budget):
+            if (current_total + dishes[dish_idx].price <= request.total_budget):
                 individual[dish_idx] = 1
                 available_budget -= dishes[dish_idx].price
                 current_total += dishes[dish_idx].price
                 selected_count += 1
-                
                 if current_total >= min_budget_required:
                     break
     
@@ -281,77 +270,82 @@ def _create_valid_individual(dishes: List[Dish], request: MenuRequest, config: A
     return individual
 
 def _evaluate_menu(individual: List[int], dishes: List[Dish], request: MenuRequest, config: AppConfig) -> Tuple[float]:
-    """评估函数，用于计算一个菜单的适应度分数"""
+    """
+    增加“菜品数不少于人数”的硬性约束，并移除了数量评分
+    """
     selected_dishes = [dishes[i] for i, bit in enumerate(individual) if bit == 1]
+    if not selected_dishes: return (0,)
 
-    if not selected_dishes:
+    if len(selected_dishes) < request.diner_count:
         return (0,)
 
     total_price = sum(d.price for d in selected_dishes)
-
-    # 硬性约束：如果总价超过预算，适应度为0
-    if total_price > request.total_budget:
-        return (0,)
-    
-    # 硬性约束：预算利用率不能低于80%
+    if total_price > request.total_budget: return (0,)
     budget_utilization = total_price / request.total_budget if request.total_budget > 0 else 0
-    if budget_utilization < 0.8:
-        return (0,)
+    if budget_utilization < 0.8: return (0,)
 
-    num_people = request.diner_count
+    price_score = budget_utilization
     
-    # 软性约束评分
-    
-    # 1. 价格得分：菜单总价越接近预算的100%，得分越高
-    if request.total_budget == 0:
-        price_score = 1.0 if total_price == 0 else 0.0
-    else:
-        price_score = budget_utilization
-
-    # 2. 菜品数量得分
-    ideal_dish_count = num_people + config.ga.dish_count_add_on
-    if ideal_dish_count == 0:
-        dish_count_score = 1.0 if not selected_dishes else 0.0
-    else:
-        dish_count_score = 1.0 - (abs(len(selected_dishes) - ideal_dish_count) / ideal_dish_count)
-
-    # 3. 多样性得分
-    all_cooking_methods = [method for d in selected_dishes for method in d.cooking_methods]
-    all_flavors = [flavor for d in selected_dishes for flavor in d.flavor_tags]
-    all_main_ingredients = [ing for d in selected_dishes for ing in d.main_ingredient]
-
-    cooking_style_variety = len(set(all_cooking_methods))
-    flavor_variety = len(set(all_flavors))
-    main_ingredient_variety = len(set(all_main_ingredients))
-    
-    if len(selected_dishes) > 0:
-        variety_score = (cooking_style_variety + flavor_variety + main_ingredient_variety) / (len(selected_dishes) * 3)
-    else:
-        variety_score = 0
-        
-    # 4. 荤素搭配得分
+    all_cooking_methods = {method for d in selected_dishes for method in d.cooking_methods}
+    all_flavors = {flavor for d in selected_dishes for flavor in d.flavor_tags}
+    all_main_ingredients = {ing for d in selected_dishes for ing in d.main_ingredient}
+    variety_score = (len(all_cooking_methods) + len(all_flavors) + len(all_main_ingredients)) / (len(selected_dishes) * 3) if selected_dishes else 0
     num_meat = sum(1 for d in selected_dishes if not d.is_vegetarian)
     num_veg = len(selected_dishes) - num_meat
-    if len(selected_dishes) > 0:
-        balance_score = 1.0 - abs(num_meat - num_veg) / len(selected_dishes)
-    else:
-        balance_score = 0
-
-    # 5. 高价值菜品得分
+    balance_score = 1.0 - abs(num_meat - num_veg) / len(selected_dishes) if selected_dishes else 0
     high_value_count = sum(1 for d in selected_dishes if d.is_signature)
-    if len(selected_dishes) > 0:
-        high_value_score = high_value_count / len(selected_dishes)
-    else:
-        high_value_score = 0.0
+    high_value_score = high_value_count / len(selected_dishes) if selected_dishes else 0.0
 
-    # 最终加权总分
-    final_score = (
+    demographic_balance_score = 1.0
+    if request.diner_breakdown and request.diner_count > 0:
+        ideal_dish_count_for_quota = len(selected_dishes)
+        breakdown = request.diner_breakdown
+        
+        quota_male = (breakdown.male_adults / request.diner_count) * ideal_dish_count_for_quota
+        quota_female = (breakdown.female_adults / request.diner_count) * ideal_dish_count_for_quota
+        quota_child = (breakdown.children / request.diner_count) * ideal_dish_count_for_quota
+        actual_male = sum(1 for d in selected_dishes if d.applicable_people == "男性友好")
+        actual_female = sum(1 for d in selected_dishes if d.applicable_people == "女性友好")
+        actual_child = sum(1 for d in selected_dishes if d.applicable_people == "儿童友好")
+        actual_universal = sum(1 for d in selected_dishes if d.applicable_people == "全部")
+
+        if actual_universal > 0:
+            actual_male += actual_universal * (breakdown.male_adults / request.diner_count)
+            actual_female += actual_universal * (breakdown.female_adults / request.diner_count)
+            actual_child += actual_universal * (breakdown.children / request.diner_count)
+
+        scores = []
+        if quota_male > 0: scores.append(1.0 - (abs(actual_male - quota_male) / ideal_dish_count_for_quota))
+        if quota_female > 0: scores.append(1.0 - (abs(actual_female - quota_female) / ideal_dish_count_for_quota))
+        if quota_child > 0: scores.append(1.0 - (abs(actual_child - quota_child) / ideal_dish_count_for_quota))
+        if scores: demographic_balance_score = sum(scores) / len(scores)
+
+    base_score = (
         price_score * config.ga.weight_price +
-        dish_count_score * config.ga.weight_dish_count +
         variety_score * config.ga.weight_variety +
         balance_score * config.ga.weight_balance +
-        high_value_score * config.ga.weight_high_value
+        high_value_score * config.ga.weight_high_value +
+        demographic_balance_score * config.ga.weight_demographic_balance
     ) * 100
+    
+    if base_score <= 0: return (0,)
+
+    preference_multiplier = 1.0
+    if request.preferences:
+        liked_ingredients = set(request.preferences.main_ingredient.get('likes', []))
+        liked_flavors = set(request.preferences.flavor.get('likes', []))
+        liked_methods = set(request.preferences.cooking_method.get('likes', []))
+        total_likes = len(liked_ingredients) + len(liked_flavors) + len(liked_methods)
+        if total_likes > 0:
+            matched_likes_set = set()
+            for dish in selected_dishes:
+                matched_likes_set.update(liked_ingredients.intersection(dish.main_ingredient))
+                matched_likes_set.update(liked_flavors.intersection(dish.flavor_tags))
+                matched_likes_set.update(liked_methods.intersection(dish.cooking_methods))
+            achievement_rate = len(matched_likes_set) / total_likes
+            preference_multiplier = 1.0 + (achievement_rate * config.ga.max_bonus_multiplier_preference)
+
+    final_score = base_score * preference_multiplier
 
     return (max(0, final_score),)
 
@@ -396,8 +390,7 @@ def _run_ga_blocking(dishes: List[Dish], request: MenuRequest, config: AppConfig
 
     population = toolbox.population(n=config.ga.population_size)
     
-    # 使用自定义的差异性名人堂，只保留2个最优且差异明显的解
-    hall_of_fame = DiversityHallOfFame(maxsize=2, dishes=dishes, min_difference_threshold=0.5)
+    hall_of_fame = DiversityHallOfFame(maxsize=config.ga.hall_of_fame_size, dishes=dishes, min_difference_threshold=config.ga.hof_min_difference_threshold)
 
     print(f"开始为 {request.diner_count} 人就餐执行遗传算法...")
 
@@ -432,22 +425,22 @@ def _run_ga_blocking(dishes: List[Dish], request: MenuRequest, config: AppConfig
         
         # 更新差异性名人堂
         for ind in offspring:
-            if ind.fitness.values[0] > 0:  # 只考虑有效的解决方案
+            if ind.fitness.values[0] > 0: 
                 hall_of_fame.insert(ind)
         
         population[:] = offspring
         
-        # 记录统计信息
+        # 记录统计信息 
         if generation % 10 == 0:
             record = stats.compile(population)
             print(f"第 {generation} 代: 平均适应度 {record['avg']}, 最大适应度 {record['max']}, 名人堂大小 {len(hall_of_fame)}")
 
     print(f"遗传算法执行完毕。差异性名人堂中有 {len(hall_of_fame)} 个最优解。")
     
-    # 显示最终结果的差异度
-    if len(hall_of_fame) == 2:
+    # 显示最终结果的差异度 
+    if len(hall_of_fame) >= 2:
         difference = _calculate_menu_difference(hall_of_fame[0], hall_of_fame[1], dishes)
-        print(f"两个解决方案的差异度: {difference:.2%}")
+        print(f"名人堂中前两个解决方案的差异度: {difference:.2%}")
     
     return hall_of_fame
 
@@ -487,14 +480,13 @@ async def plan_menu_async(
         # 适应度分数，精确到小数点后2位
         score = round(individual.fitness.values[0], 2)
         total_price = sum(dish.price for dish in selected_dishes)
-        budget_utilization = round(total_price / request.total_budget * 100, 1) if request.total_budget > 0 else 0
-
+        
         simplified_dishes = [
             SimplifiedDish(
                 dish_id=dish.dish_id,
                 dish_name=dish.dish_name,
-                final_price=dish.final_price,  # <--- 修正
-                contribution_to_dish_count=dish.contribution_to_dish_count
+                final_price=dish.price, 
+                contribution_to_dish_count=1 
             )
             for dish in selected_dishes
         ]
